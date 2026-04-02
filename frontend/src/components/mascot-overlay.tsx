@@ -14,7 +14,8 @@ interface MascotStep {
 	message: string
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'
+const API_URL =
+	process.env.NEXT_PUBLIC_API_URL || 'https://push-lt9u.onrender.com/api'
 const STEP_DELAY_MS = 5000
 
 const SCENARIOS: Record<MascotScenario, MascotStep[]> = {
