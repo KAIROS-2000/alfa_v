@@ -1,0 +1,341 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from functools import wraps
+from typing import Callable
+from uuid import uuid4
+
+import jwt
+from flask import Response, current_app, request
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from ..core.db import db
+from ..models.user import RefreshToken, SecurityThrottle, User, UserRole
+
+ACCESS_COOKIE_NAME = 'codequest_access_token'
+REFRESH_COOKIE_NAME = 'codequest_refresh_token'
+DEFAULT_PASSWORD_MIN_LENGTH = 10
+ADMIN_PASSWORD_MIN_LENGTH = 12
+LOGIN_THROTTLE_SCOPE = 'login'
+PARENT_ACCESS_THROTTLE_SCOPE = 'parent_access'
+COMMON_WEAK_PASSWORDS = {
+    '123456',
+    '12345678',
+    '123456789',
+    '1234567890',
+    'password',
+    'password123',
+    'qwerty123',
+    'qwertyui',
+    'letmein',
+    'admin123',
+    'changeme',
+}
+
+
+def hash_password(password: str) -> str:
+    return generate_password_hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return check_password_hash(password_hash, password)
+
+
+def password_has_whitespace(password: str) -> bool:
+    return any(char.isspace() for char in password)
+
+
+def validate_password(password: str, minimum_length: int = DEFAULT_PASSWORD_MIN_LENGTH) -> str | None:
+    if len(password) < minimum_length:
+        return f'Пароль должен содержать не менее {minimum_length} символов.'
+    if password_has_whitespace(password):
+        return 'Пароль не должен содержать пробелы.'
+    if password.strip().lower() in COMMON_WEAK_PASSWORDS:
+        return 'Этот пароль слишком простой. Используйте более уникальную комбинацию.'
+    if not any(char.islower() for char in password):
+        return 'Пароль должен содержать хотя бы одну строчную букву.'
+    if not any(char.isupper() for char in password):
+        return 'Пароль должен содержать хотя бы одну заглавную букву.'
+    if not any(char.isdigit() for char in password):
+        return 'Пароль должен содержать хотя бы одну цифру.'
+    if not any(not char.isalnum() for char in password):
+        return 'Пароль должен содержать хотя бы один специальный символ.'
+    return None
+
+
+def password_strength(password: str) -> str:
+    score = 0
+    score += len(password) >= DEFAULT_PASSWORD_MIN_LENGTH
+    score += any(char.islower() for char in password)
+    score += any(char.isupper() for char in password)
+    score += any(char.isdigit() for char in password)
+    score += any(not char.isalnum() for char in password)
+    return ['weak', 'weak', 'medium', 'medium', 'strong', 'strong'][score]
+
+
+def _request_ip() -> str:
+    return (request.remote_addr or 'unknown').strip()[:64] or 'unknown'
+
+
+def _ensure_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _throttle_settings(scope: str) -> tuple[int, int, int]:
+    if scope == LOGIN_THROTTLE_SCOPE:
+        return (
+            int(current_app.config.get('LOGIN_RATE_LIMIT_WINDOW_SECONDS', 900)),
+            int(current_app.config.get('LOGIN_RATE_LIMIT_MAX_FAILURES', 8)),
+            int(current_app.config.get('LOGIN_RATE_LIMIT_BLOCK_SECONDS', 900)),
+        )
+    if scope == PARENT_ACCESS_THROTTLE_SCOPE:
+        return (
+            int(current_app.config.get('PARENT_ACCESS_RATE_LIMIT_WINDOW_SECONDS', 600)),
+            int(current_app.config.get('PARENT_ACCESS_RATE_LIMIT_MAX_FAILURES', 20)),
+            int(current_app.config.get('PARENT_ACCESS_RATE_LIMIT_BLOCK_SECONDS', 900)),
+        )
+    return (900, 10, 900)
+
+
+def _throttle_record(scope: str, subject: str, ip_address: str) -> SecurityThrottle | None:
+    return SecurityThrottle.query.filter_by(
+        scope=scope,
+        subject=subject,
+        ip_address=ip_address,
+    ).first()
+
+
+def _reset_expired_window(record: SecurityThrottle, now: datetime, window_seconds: int) -> bool:
+    changed = False
+    blocked_until = _ensure_utc(record.blocked_until)
+    if blocked_until and blocked_until <= now:
+        record.blocked_until = None
+        changed = True
+    window_started_at = _ensure_utc(record.window_started_at) or now
+    if (now - window_started_at).total_seconds() > window_seconds:
+        record.failed_count = 0
+        record.window_started_at = now
+        record.blocked_until = None
+        changed = True
+    return changed
+
+
+def throttle_allowed(scope: str, subject: str, ip_address: str | None = None) -> bool:
+    now = datetime.now(UTC)
+    normalized_ip = (ip_address or '').strip()[:64] or _request_ip()
+    record = _throttle_record(scope, subject, normalized_ip)
+    if record is None:
+        return True
+
+    window_seconds, _, _ = _throttle_settings(scope)
+    changed = _reset_expired_window(record, now, window_seconds)
+    blocked_until = _ensure_utc(record.blocked_until)
+    if blocked_until and blocked_until > now:
+        if changed:
+            db.session.commit()
+        return False
+    if changed:
+        db.session.commit()
+    return True
+
+
+def register_throttle_failure(scope: str, subject: str, ip_address: str | None = None) -> bool:
+    now = datetime.now(UTC)
+    normalized_ip = (ip_address or '').strip()[:64] or _request_ip()
+    window_seconds, max_failures, block_seconds = _throttle_settings(scope)
+    record = _throttle_record(scope, subject, normalized_ip)
+    if record is None:
+        record = SecurityThrottle(
+            scope=scope,
+            subject=subject,
+            ip_address=normalized_ip,
+            failed_count=0,
+            window_started_at=now,
+        )
+        db.session.add(record)
+    else:
+        _reset_expired_window(record, now, window_seconds)
+
+    if record.failed_count == 0:
+        record.window_started_at = now
+    record.failed_count += 1
+    if record.failed_count >= max_failures:
+        record.blocked_until = now + timedelta(seconds=block_seconds)
+    db.session.commit()
+    blocked_until = _ensure_utc(record.blocked_until)
+    return blocked_until is None or blocked_until <= now
+
+
+def clear_throttle_failures(scope: str, subject: str, ip_address: str | None = None) -> None:
+    normalized_ip = (ip_address or '').strip()[:64] or _request_ip()
+    record = _throttle_record(scope, subject, normalized_ip)
+    if record is None:
+        return
+    db.session.delete(record)
+    db.session.commit()
+
+
+def login_attempt_allowed(login_identifier: str, ip_address: str | None = None) -> bool:
+    return throttle_allowed(LOGIN_THROTTLE_SCOPE, login_identifier or 'unknown', ip_address)
+
+
+def register_login_failure(login_identifier: str, ip_address: str | None = None) -> bool:
+    return register_throttle_failure(LOGIN_THROTTLE_SCOPE, login_identifier or 'unknown', ip_address)
+
+
+def clear_login_failures(login_identifier: str, ip_address: str | None = None) -> None:
+    clear_throttle_failures(LOGIN_THROTTLE_SCOPE, login_identifier or 'unknown', ip_address)
+
+
+def parent_access_allowed(ip_address: str | None = None) -> bool:
+    return throttle_allowed(PARENT_ACCESS_THROTTLE_SCOPE, 'invite_lookup', ip_address)
+
+
+def register_parent_access_failure(ip_address: str | None = None) -> bool:
+    return register_throttle_failure(PARENT_ACCESS_THROTTLE_SCOPE, 'invite_lookup', ip_address)
+
+
+def clear_parent_access_failures(ip_address: str | None = None) -> None:
+    clear_throttle_failures(PARENT_ACCESS_THROTTLE_SCOPE, 'invite_lookup', ip_address)
+
+
+def create_token_pair(user: User) -> dict:
+    now = datetime.now(UTC)
+    access_payload = {
+        'sub': str(user.id),
+        'role': user.role.value,
+        'type': 'access',
+        'iat': int(now.timestamp()),
+        'exp': int((now + timedelta(minutes=current_app.config['ACCESS_TOKEN_MINUTES'])).timestamp()),
+    }
+    refresh_id = str(uuid4())
+    refresh_payload = {
+        'sub': str(user.id),
+        'role': user.role.value,
+        'type': 'refresh',
+        'jti': refresh_id,
+        'iat': int(now.timestamp()),
+        'exp': int((now + timedelta(days=current_app.config['REFRESH_TOKEN_DAYS'])).timestamp()),
+    }
+    access_token = jwt.encode(access_payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+    refresh_token = jwt.encode(refresh_payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+
+    db.session.add(
+        RefreshToken(
+            user_id=user.id,
+            token_id=refresh_id,
+            expires_at=now + timedelta(days=current_app.config['REFRESH_TOKEN_DAYS']),
+        )
+    )
+    db.session.commit()
+    return {'access_token': access_token, 'refresh_token': refresh_token}
+
+
+def decode_token(token: str) -> dict:
+    return jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+
+
+def _decode_token_without_verification(token: str) -> dict:
+    return jwt.decode(
+        token,
+        options={'verify_signature': False, 'verify_exp': False},
+        algorithms=['HS256'],
+    )
+
+
+def _token_max_age(token: str, fallback_seconds: int) -> int:
+    try:
+        payload = _decode_token_without_verification(token)
+    except Exception:
+        return fallback_seconds
+    exp = payload.get('exp')
+    if not isinstance(exp, int):
+        return fallback_seconds
+    return max(exp - int(datetime.now(UTC).timestamp()), 0)
+
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> Response:
+    secure = bool(current_app.config.get('SESSION_COOKIE_SECURE', current_app.config.get('IS_PRODUCTION', False)))
+    same_site = current_app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=_token_max_age(access_token, int(current_app.config['ACCESS_TOKEN_MINUTES']) * 60),
+        httponly=True,
+        secure=secure,
+        samesite=same_site,
+        path='/',
+    )
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=_token_max_age(refresh_token, int(current_app.config['REFRESH_TOKEN_DAYS']) * 24 * 60 * 60),
+        httponly=True,
+        secure=secure,
+        samesite=same_site,
+        path='/',
+    )
+    return response
+
+
+def clear_auth_cookies(response: Response) -> Response:
+    secure = bool(current_app.config.get('SESSION_COOKIE_SECURE', current_app.config.get('IS_PRODUCTION', False)))
+    same_site = current_app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
+    response.delete_cookie(ACCESS_COOKIE_NAME, path='/', secure=secure, httponly=True, samesite=same_site)
+    response.delete_cookie(REFRESH_COOKIE_NAME, path='/', secure=secure, httponly=True, samesite=same_site)
+    return response
+
+
+def access_token_from_request() -> str:
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        return auth_header.removeprefix('Bearer ').strip()
+    return (request.cookies.get(ACCESS_COOKIE_NAME) or '').strip()
+
+
+def refresh_token_from_request() -> str:
+    return (request.cookies.get(REFRESH_COOKIE_NAME) or '').strip()
+
+
+def revoke_refresh_token(refresh_token: str | None) -> None:
+    token_value = (refresh_token or '').strip()
+    if not token_value:
+        return
+    try:
+        payload = decode_token(token_value)
+    except Exception:
+        return
+    token = RefreshToken.query.filter_by(token_id=payload.get('jti')).first()
+    if token:
+        db.session.delete(token)
+        db.session.commit()
+
+
+def auth_required(roles: list[UserRole] | None = None) -> Callable:
+    def decorator(func: Callable):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            token = access_token_from_request()
+            if not token:
+                return {'message': 'Missing session token'}, 401
+            try:
+                payload = decode_token(token)
+                if payload.get('type') != 'access':
+                    raise ValueError('Not access token')
+                user = db.session.get(User, int(payload['sub']))
+            except Exception:
+                return {'message': 'Invalid token'}, 401
+
+            if not user or not user.is_active:
+                return {'message': 'User not found or blocked'}, 403
+            if roles and user.role not in roles:
+                return {'message': 'Forbidden'}, 403
+            return func(user, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
