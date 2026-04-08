@@ -23,20 +23,21 @@ function submissionStatusLabel(status?: string) {
   return 'Ждёт выполнения'
 }
 
-export function DashboardView() {
-  const [data, setData] = useState<DashboardData | null>(null)
+export function DashboardView({ initialData = null }: { initialData?: DashboardData | null }) {
+  const [data, setData] = useState<DashboardData | null>(initialData)
   const [error, setError] = useState('')
   const [classCode, setClassCode] = useState('')
   const [message, setMessage] = useState('')
 
   async function loadDashboard() {
-    const result = await api<DashboardData>('/dashboard', undefined, true)
+    const result = await api<DashboardData>('/dashboard', undefined, 'required')
     setData(result)
   }
 
   useEffect(() => {
+    if (initialData) return
     loadDashboard().catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить dashboard'))
-  }, [])
+  }, [initialData])
 
   async function joinClass() {
     if (!classCode.trim()) {
@@ -44,7 +45,7 @@ export function DashboardView() {
       return
     }
     try {
-      await api('/classes/join', { method: 'POST', body: JSON.stringify({ code: classCode.trim() }) }, true)
+      await api('/classes/join', { method: 'POST', body: JSON.stringify({ code: classCode.trim() }) }, 'required')
       setMessage('Класс успешно подключён.')
       setClassCode('')
       await loadDashboard()
@@ -55,7 +56,7 @@ export function DashboardView() {
 
   async function generateParentInvite() {
     try {
-      await api('/parent/invite', { method: 'POST', body: JSON.stringify({ label: 'Семейный кабинет' }) }, true)
+      await api('/parent/invite', { method: 'POST', body: JSON.stringify({ label: 'Семейный кабинет' }) }, 'required')
       setMessage('Семейная ссылка обновлена.')
       await loadDashboard()
     } catch (e) {
@@ -95,7 +96,7 @@ export function DashboardView() {
                 </Link>
               </>
             ) : (
-              <p className="mt-2 text-sm text-slate-300">Все доступные уроки пройдены. Выберите новый модуль на roadmap.</p>
+              <p className="mt-2 text-sm text-slate-300">Все доступные уроки пройдены. Выберите новый модуль в разделе уроков.</p>
             )}
           </div>
         </div>

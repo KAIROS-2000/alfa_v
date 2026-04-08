@@ -1,7 +1,24 @@
+import { serverApi } from '@/lib/server-api'
 import { AdminWorkspace } from '@/components/admin-workspace'
 import { SiteHeader } from '@/components/site-header'
+import { ModuleItem, UserItem } from '@/types'
 
-export default function AdminPage() {
+interface OverviewData {
+  stats: {
+    users: number
+    students: number
+    teachers: number
+    modules: number
+    lessons: number
+  }
+}
+
+export default async function AdminPage() {
+  const [overview, modules] = await Promise.all([
+    serverApi<OverviewData>('/admin/overview').catch(() => null),
+    serverApi<{ modules: ModuleItem[] }>('/admin/modules').catch(() => null),
+  ])
+
   return (
     <main>
       <SiteHeader />
@@ -11,7 +28,7 @@ export default function AdminPage() {
           <h1 className="page-title mt-2 text-slate-900">Контент, публикация модулей и структура курса</h1>
           <p className="page-lead mt-4 max-w-3xl text-slate-600">Админ управляет публикацией модулей, отслеживает статистику платформы и поддерживает структуру учебного контента в актуальном состоянии.</p>
         </section>
-        <AdminWorkspace />
+        <AdminWorkspace initialData={{ overview, modules: modules?.modules }} />
       </div>
     </main>
   )

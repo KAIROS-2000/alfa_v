@@ -14,8 +14,6 @@ interface MascotStep {
 	message: string
 }
 
-const API_URL =
-	process.env.NEXT_PUBLIC_API_URL || 'https://push-lt9u.onrender.com/api'
 const STEP_DELAY_MS = 5000
 
 const SCENARIOS: Record<MascotScenario, MascotStep[]> = {
@@ -49,7 +47,7 @@ const SCENARIOS: Record<MascotScenario, MascotStep[]> = {
 }
 
 function spriteUrl(filename: string) {
-	return `${API_URL}/mascot/${encodeURIComponent(filename)}`
+	return `/api/mascot/${encodeURIComponent(filename)}`
 }
 
 export function MascotOverlay() {

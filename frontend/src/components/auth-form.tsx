@@ -5,7 +5,6 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { api } from '@/lib/api'
 import { queueMascotScenario } from '@/lib/mascot'
-import { saveTokens } from '@/lib/storage'
 import { setTheme } from '@/lib/theme'
 import { AuthOptions, UserItem } from '@/types'
 
@@ -13,9 +12,14 @@ const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
 const PASSWORD_WHITESPACE_RE = /\s/
 
 function strengthLabel(password: string) {
-  if (password.length < 6) return 'Слабый'
-  const score = [/[A-Z]/.test(password), /\d/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length
-  if (score >= 2) return 'Сильный'
+  if (password.length < 10) return 'Слабый'
+  const score = [
+    /[a-z]/.test(password),
+    /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password),
+  ].filter(Boolean).length
+  if (score >= 4) return 'Сильный'
   return 'Средний'
 }
 
@@ -51,8 +55,8 @@ export function AuthForm({ mode, options }: { mode: 'login' | 'register'; option
       setError('Укажите корректный email.')
       return
     }
-    if (mode === 'register' && form.password.length < 6) {
-      setError('Пароль должен содержать не менее 6 символов.')
+    if (mode === 'register' && form.password.length < 10) {
+      setError('Пароль должен содержать не менее 10 символов.')
       return
     }
     if (mode === 'register' && hasPasswordWhitespace(form.password)) {
@@ -84,11 +88,10 @@ export function AuthForm({ mode, options }: { mode: 'login' | 'register'; option
               ...(isTeacherRegistration ? {} : { age_group: form.age_group }),
             }
 
-      const result = await api<{ access_token: string; refresh_token: string; user: UserItem }>('/auth/' + mode, {
+      const result = await api<{ user: UserItem }>('/auth/' + mode, {
         method: 'POST',
         body: JSON.stringify(payload),
       })
-      saveTokens(result.access_token, result.refresh_token)
       setTheme(result.user?.theme || form.theme)
       if (mode === 'register' && result.user?.role === 'student') {
         queueMascotScenario('post_register_intro')
@@ -106,17 +109,15 @@ export function AuthForm({ mode, options }: { mode: 'login' | 'register'; option
       <div className="grid w-full max-w-6xl gap-8 lg:grid-cols-[0.95fr_1.05fr]">
         <section className="order-2 codequest-card grid-bg min-w-0 overflow-hidden p-6 text-slate-900 sm:p-8 lg:order-1">
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-white shadow-lg shadow-sky-200 ring-1 ring-sky-100">
-              <Image
-                src="/kodiums-logo.png"
-                alt="Логотип Кодиумс"
-                width={48}
-                height={48}
-                className="h-12 w-12 rounded-full object-cover"
-                priority
-              />
-            </div>
-            <p className="text-sm font-bold uppercase tracking-[0.24em] text-sky-600">Кодиумс</p>
+            <Image
+              src="/progyx-logo.png"
+              alt="Логотип Progyx"
+              width={48}
+              height={48}
+              className="h-12 w-12 shrink-0 object-contain drop-shadow-[0_10px_22px_rgba(14,165,233,0.2)]"
+              priority
+            />
+            <p className="text-sm font-bold uppercase tracking-[0.24em] text-sky-600">Progyx</p>
           </div>
           <h1 className="mt-3 text-[1.65rem] font-black leading-[1.05] tracking-[-0.03em] sm:text-4xl">
             {mode === 'login' ? 'С возвращением!' : 'Создай аккаунт и начни путь'}
@@ -196,7 +197,7 @@ export function AuthForm({ mode, options }: { mode: 'login' | 'register'; option
                 </button>
               </div>
               {mode === 'register' && <p className="text-sm text-slate-500">Надёжность пароля: <span className="font-semibold text-slate-900">{strength}</span></p>}
-              {mode === 'register' && <p className="text-sm text-slate-500">Минимум 6 символов, без пробелов.</p>}
+              {mode === 'register' && <p className="text-sm text-slate-500">Минимум 10 символов: строчные и заглавные буквы, цифра, спецсимвол, без пробелов.</p>}
             </label>
 
             {mode === 'register' && !isTeacherRegistration && (

@@ -1,13 +1,28 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
-import Editor from '@monaco-editor/react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import { queueMascotScenario } from '@/lib/mascot'
-import { getAccessTokenRole } from '@/lib/storage'
-import { LessonGigachatDrawer } from '@/components/lesson-gigachat-drawer'
 import { JudgeReport, LessonDetail, ProgressItem, QuizItem, QuizQuestion } from '@/types'
+
+const LazyLessonCodeEditor = dynamic(
+  () => import('@/components/lesson-code-editor').then((mod) => mod.LessonCodeEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-[360px] items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+        Загружаем редактор…
+      </div>
+    ),
+  },
+)
+
+const LazyLessonGigachatDrawer = dynamic(
+  () => import('@/components/lesson-gigachat-drawer').then((mod) => mod.LessonGigachatDrawer),
+  { ssr: false, loading: () => null },
+)
 
 function moveItem(list: string[], from: number, to: number) {
   const next = [...list]
@@ -47,6 +62,31 @@ function isQuestionAnswered(question: QuizQuestion, answer: unknown) {
 
 function ageGroupSupportsCodePractice(ageGroup?: string | null) {
   return ageGroup !== 'junior'
+}
+
+type ViewerRole = 'student' | 'teacher' | 'admin' | 'superadmin'
+
+export interface LessonPlayerPayload {
+  lesson: LessonDetail
+  progress: ProgressItem
+  viewer_role: ViewerRole
+}
+
+function normalizeLessonPayload(data: LessonPlayerPayload) {
+  const lesson = {
+    ...data.lesson,
+    module: {
+      ...data.lesson.module,
+      lessons: Array.isArray(data.lesson.module?.lessons) ? data.lesson.module.lessons : [],
+    },
+  }
+  const isFinished = data.progress.status === 'completed' || data.progress.status === 'pending_review'
+  return {
+    lesson,
+    progress: data.progress,
+    viewerRole: data.viewer_role,
+    isFinished,
+  }
 }
 
 function lessonStatusLabel(status?: ProgressItem['status']) {
@@ -169,10 +209,17 @@ function QuestionCard({ question, value, onChange, number }: { question: QuizQue
   )
 }
 
-export function LessonPlayer({ lessonId }: { lessonId: number }) {
+export function LessonPlayer({
+  lessonId,
+  initialData = null,
+}: {
+  lessonId: number
+  initialData?: LessonPlayerPayload | null
+}) {
   const router = useRouter()
-  const currentUserRole = useMemo(() => getAccessTokenRole(), [])
-  const [lesson, setLesson] = useState<LessonDetail | null>(null)
+  const normalizedInitialData = initialData ? normalizeLessonPayload(initialData) : null
+  const [currentUserRole, setCurrentUserRole] = useState<ViewerRole | null>(normalizedInitialData?.viewerRole ?? null)
+  const [lesson, setLesson] = useState<LessonDetail | null>(normalizedInitialData?.lesson ?? null)
   const [error, setError] = useState('')
   const [answer, setAnswer] = useState('')
   const [quizAnswers, setQuizAnswers] = useState<Record<string, unknown>>({})
@@ -181,41 +228,38 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
   const [loadingTask, setLoadingTask] = useState(false)
   const [loadingQuiz, setLoadingQuiz] = useState(false)
   const [shownHints, setShownHints] = useState(0)
-  const [theoryMarked, setTheoryMarked] = useState(false)
-  const [interactiveMarked, setInteractiveMarked] = useState(false)
-  const [taskPassed, setTaskPassed] = useState(false)
-  const [quizPassed, setQuizPassed] = useState(false)
+  const [theoryMarked, setTheoryMarked] = useState(Boolean(normalizedInitialData?.isFinished))
+  const [interactiveMarked, setInteractiveMarked] = useState(Boolean(normalizedInitialData?.isFinished))
+  const [taskPassed, setTaskPassed] = useState(Boolean(normalizedInitialData?.isFinished))
+  const [quizPassed, setQuizPassed] = useState(Boolean(normalizedInitialData?.isFinished))
   const [savingCompletion, setSavingCompletion] = useState(false)
-  const [progress, setProgress] = useState<ProgressItem | null>(null)
+  const [progress, setProgress] = useState<ProgressItem | null>(normalizedInitialData?.progress ?? null)
   const [judgeReport, setJudgeReport] = useState<JudgeReport | null>(null)
   const isTeacherLesson = Boolean(lesson?.is_custom)
   const bypassCompletionApi = currentUserRole !== null && currentUserRole !== 'student'
+  const deferredAnswer = useDeferredValue(answer)
 
   useEffect(() => {
-    api<{ lesson: LessonDetail; progress: ProgressItem }>(`/lessons/${lessonId}`, undefined, true)
+    if (initialData) return
+    api<LessonPlayerPayload>(`/lessons/${lessonId}`, undefined, 'required')
       .then((data) => {
-        setLesson({
-          ...data.lesson,
-          module: {
-            ...data.lesson.module,
-            lessons: Array.isArray(data.lesson.module?.lessons) ? data.lesson.module.lessons : [],
-          },
-        })
-        setProgress(data.progress)
+        const normalized = normalizeLessonPayload(data)
+        setCurrentUserRole(normalized.viewerRole)
+        setLesson(normalized.lesson)
+        setProgress(normalized.progress)
         setAnswer('')
         setQuizAnswers({})
         setShownHints(0)
-        const isFinished = data.progress.status === 'completed' || data.progress.status === 'pending_review'
-        setTheoryMarked(isFinished)
-        setInteractiveMarked(isFinished)
-        setTaskPassed(isFinished)
-        setQuizPassed(isFinished)
+        setTheoryMarked(normalized.isFinished)
+        setInteractiveMarked(normalized.isFinished)
+        setTaskPassed(normalized.isFinished)
+        setQuizPassed(normalized.isFinished)
         setResult('')
         setResultTone('neutral')
         setJudgeReport(null)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить урок'))
-  }, [lessonId])
+  }, [initialData, lessonId])
 
   const quiz = useMemo<QuizItem | null>(() => lesson?.quizzes?.[0] || null, [lesson])
   const task = lesson?.tasks?.[0]
@@ -300,11 +344,11 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
     ? 'Мы сохраним текущий прогресс и отправим урок учителю на проверку. После проверки откроется следующий шаг.'
     : bypassCompletionApi
       ? nextLesson
-        ? 'Можно вернуться в roadmap или сразу открыть следующий урок модуля.'
-        : 'Можно вернуться в roadmap и выбрать следующий шаг.'
+        ? 'Можно вернуться к урокам или сразу открыть следующий урок модуля.'
+        : 'Можно вернуться к урокам и выбрать следующий шаг.'
       : nextLesson
-        ? 'Сохраним результат урока и дадим выбор: вернуться в roadmap или сразу перейти к следующему уроку модуля.'
-        : 'Сохраним результат урока и поможем вернуться в roadmap, чтобы выбрать следующий шаг.'
+        ? 'Сохраним результат урока и дадим выбор: вернуться к урокам или сразу перейти к следующему уроку модуля.'
+        : 'Сохраним результат урока и поможем вернуться к урокам, чтобы выбрать следующий шаг.'
   const completionBadgeLabel = completionReady ? '100%' : `${progressPercent}%`
   const nextActionTitle = savingCompletion
     ? 'Сохраняем...'
@@ -318,7 +362,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
   const nextActionHint = teacherReviewFlow
     ? 'Откроется после проверки учителем'
     : !nextLesson
-      ? 'Можно вернуться в roadmap и выбрать другой модуль'
+      ? 'Можно вернуться к урокам и выбрать другой модуль'
       : !canOpenNextLesson
         ? `Сначала набери минимум ${lessonPassingScore}% прогресса в текущем уроке`
         : nextLesson.title
@@ -344,7 +388,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
       }>(`/tasks/${task.id}/submit`, {
         method: 'POST',
         body: JSON.stringify({ answer }),
-      }, true)
+      }, 'required')
       const requiresTeacherReview = Boolean(data.requires_teacher_review)
       setJudgeReport(data.judge_report || null)
       setResult(requiresTeacherReview ? data.feedback : `${data.feedback} Результат: ${data.score}%. ${data.xp_awarded ? `+${data.xp_awarded} XP.` : ''}`)
@@ -367,7 +411,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
       const data = await api<{ passed: boolean; score: number; correct_answers: number; total_questions: number; xp_awarded: number; progress: ProgressItem }>(`/quizzes/${quiz.id}/submit`, {
         method: 'POST',
         body: JSON.stringify({ answers: quizAnswers }),
-      }, true)
+      }, 'required')
       setResult(`Тест: ${data.correct_answers}/${data.total_questions}, ${data.score}%. ${data.passed ? 'Урок завершён!' : 'Можно улучшить результат.'} ${data.xp_awarded ? `+${data.xp_awarded} XP.` : ''}`)
       setResultTone(data.passed ? 'success' : 'warning')
       setQuizPassed(data.passed)
@@ -390,7 +434,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
       const data = await api<{ message: string; progress: ProgressItem; redirect_url: string; first_completed_lesson?: boolean }>(`/lessons/${lessonId}/complete`, {
         method: 'PATCH',
         body: JSON.stringify({ completion_percent: progressPercent, answer }),
-      }, true)
+      }, 'required')
       setProgress(data.progress)
       setResult(data.message)
       setResultTone(data.progress.status === 'completed' || data.progress.status === 'pending_review' ? 'success' : 'neutral')
@@ -557,13 +601,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
                 <p className="mt-3 text-sm leading-7 text-slate-600">{task.prompt}</p>
                 {usesCodeEditor ? (
                   <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200">
-                    <Editor
-                      height="360px"
-                      defaultLanguage={editorLanguage}
-                      value={answer}
-                      onChange={(value) => setAnswer(value || '')}
-                      theme="vs-light"
-                    />
+                    <LazyLessonCodeEditor language={editorLanguage} value={answer} onChange={setAnswer} />
                   </div>
                 ) : (
                   <div className="mt-5 overflow-hidden rounded-[24px] border border-slate-200 bg-white p-3">
@@ -736,7 +774,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
                 className="lesson-completion-button lesson-completion-button-roadmap"
               >
                 <span className="lesson-completion-button-title">
-                  {savingCompletion ? 'Сохраняем...' : 'Перейти в Roadmap'}
+                  {savingCompletion ? 'Сохраняем...' : 'Перейти к урокам'}
                 </span>
                 <span className="lesson-completion-button-hint">К карте модулей и следующему выбору</span>
               </button>
@@ -757,7 +795,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
         </section>
       </div>
 
-      <LessonGigachatDrawer
+      <LazyLessonGigachatDrawer
         lessonId={lessonId}
         lessonTitle={lesson.title}
         lessonSummary={lesson.summary}
@@ -769,7 +807,7 @@ export function LessonPlayer({ lessonId }: { lessonId: number }) {
         practiceTaskTitle={task?.title}
         practiceTaskPrompt={task?.prompt}
         quizTitle={quiz?.title}
-        draftAnswer={answer}
+        draftAnswer={deferredAnswer}
       />
     </>
   )

@@ -17,11 +17,14 @@ services:
       retries: 10
 
   judge-runner:
-    build: ./judge_runner
+    build:
+      context: .
+      dockerfile: judge_runner/Dockerfile
     restart: unless-stopped
     environment:
       JUDGE_RUNNER_HOST: 0.0.0.0
       JUDGE_RUNNER_PORT: "8090"
+      JUDGE_RUNNER_MAX_CONCURRENCY: ${JUDGE_RUNNER_MAX_CONCURRENCY:-4}
     expose:
       - "8090"
     read_only: true
@@ -39,38 +42,82 @@ services:
       timeout: 5s
       retries: 5
 
+  backend-init:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      ENABLE_DEMO_DATA: ${ENABLE_DEMO_DATA:-false}
+      FLASK_DEBUG: ${FLASK_DEBUG:-0}
+      CODE_JUDGE_RUNNER_URL: http://judge-runner:8090/execute
+      CODE_JUDGE_ALLOW_LOCAL_FALLBACK: ${CODE_JUDGE_ALLOW_LOCAL_FALLBACK:-false}
+      METRICS_DEBUG: ${METRICS_DEBUG:-0}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "flask", "--app", "run.py", "bootstrap-app"]
+
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      APP_ENV: production
-      ENABLE_DEMO_DATA: "false"
-      FLASK_DEBUG: "0"
+      APP_ENV: ${APP_ENV:-development}
+      ENABLE_DEMO_DATA: ${ENABLE_DEMO_DATA:-false}
+      FLASK_DEBUG: ${FLASK_DEBUG:-0}
       CODE_JUDGE_RUNNER_URL: http://judge-runner:8090/execute
-      CODE_JUDGE_ALLOW_LOCAL_FALLBACK: "false"
+      CODE_JUDGE_ALLOW_LOCAL_FALLBACK: ${CODE_JUDGE_ALLOW_LOCAL_FALLBACK:-false}
+      METRICS_DEBUG: ${METRICS_DEBUG:-0}
     depends_on:
       db:
         condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
       judge-runner:
         condition: service_healthy
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        APP_ENV: ${APP_ENV:-development}
+        NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV:-development}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        INTERNAL_API_URL: http://backend:8000/api
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      APP_ENV: ${APP_ENV:-development}
+      NEXT_PUBLIC_APP_ENV: ${NEXT_PUBLIC_APP_ENV:-development}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NEXT_TELEMETRY_DISABLED: "1"
       INTERNAL_API_URL: http://backend:8000/api
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:

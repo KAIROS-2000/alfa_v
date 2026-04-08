@@ -8,13 +8,13 @@ export default function HomePage() {
 			<section className='mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:px-6 sm:py-12 lg:grid-cols-[1.05fr_0.95fr] lg:items-center'>
 				<div>
 					<div className='inline-flex rounded-full bg-white px-4 py-2 text-xs font-semibold shadow-sm sm:text-sm'>
-						Кодиумс для детей и подростков
+						Progyx для детей и подростков
 					</div>
 					<h2 className='mt-6 max-w-4xl text-4xl font-black leading-tight text-slate-900 sm:text-5xl lg:text-6xl'>
 						Программирование, которое увлекает с первого занятия.
 					</h2>
 					<p className='mt-6 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg sm:leading-8'>
-						В Кодиумс ребёнок не просто смотрит уроки, а шаг за шагом создаёт,
+						В Progyx ребёнок не просто смотрит уроки, а шаг за шагом создаёт,
 						думает, решает и начинает чувствовать себя уверенно в цифровом мире.
 						Обучение выстроено так, чтобы интерес не пропадал, а результат был
 						виден уже с первых тем.
@@ -30,7 +30,7 @@ export default function HomePage() {
 							href='/roadmap'
 							className='inline-flex w-full justify-center rounded-full bg-white px-6 py-3 font-semibold text-slate-900 shadow-md sm:w-auto'
 						>
-							Посмотреть программу
+							Посмотреть уроки
 						</Link>
 						<Link
 							href='/parent'
@@ -67,7 +67,7 @@ export default function HomePage() {
 
 				<div className='codequest-card grid-bg overflow-hidden p-6 sm:p-8'>
 					<p className='text-sm font-bold uppercase tracking-[0.24em] text-sky-600'>
-						Почему выбирают Кодиумс
+						Почему выбирают Progyx
 					</p>
 					<div className='mt-5 grid gap-4'>
 						{[
@@ -103,7 +103,7 @@ export default function HomePage() {
 						</p>
 						<p className='mt-3 text-sm text-slate-200'>
 							Если вы ищете обучение, которое не отпугивает сложностью и при этом
-							даёт реальную пользу, Кодиумс помогает начать спокойно и двигаться
+							даёт реальную пользу, Progyx помогает начать спокойно и двигаться
 							вперёд с интересом.
 						</p>
 					</div>

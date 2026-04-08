@@ -129,7 +129,6 @@ export interface QuizQuestion {
   items?: string[]
   left?: string[]
   right?: string[]
-  correct?: unknown
 }
 
 export interface QuizItem {
@@ -237,6 +236,7 @@ export interface SubmissionItem {
   status: SubmissionStatus
   feedback?: string | null
   submitted_at: string
+  assignment_title?: string | null
 }
 
 export interface TeacherOverviewData {
@@ -275,9 +275,34 @@ export interface ParentInvite {
   created_at: string
 }
 
+export interface ParentInvitePublic {
+  label: string
+  active: boolean
+  weekly_limit_minutes: number | null
+  modules_whitelist: string[]
+  expires_at: string | null
+}
+
+export interface ParentChildProfile {
+  full_name: string
+  age_group: string | null
+  level: number
+  rank_title: string
+}
+
+export interface ParentAssignmentSummary {
+  id: number
+  assignment_id: number
+  assignment_title: string | null
+  score: number
+  status: SubmissionStatus
+  feedback?: string | null
+  submitted_at: string
+}
+
 export interface ParentAccessData {
-  invite: ParentInvite
-  child: UserItem
+  invite: ParentInvitePublic
+  child: ParentChildProfile
   summary: {
     completed_lessons: number
     average_score: number
@@ -302,5 +327,5 @@ export interface ParentAccessData {
     progress_percent: number
   }>
   recent_achievements: Array<{ id: number; name: string; description: string; xp_reward: number }>
-  recent_assignments: SubmissionItem[]
+  recent_assignments: ParentAssignmentSummary[]
 }

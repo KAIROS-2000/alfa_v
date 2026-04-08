@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
-from flask import Blueprint, request
+from flask import Blueprint, abort, request
 
 from ..core.code_judge import (
     CodeJudgeConfigurationError,
@@ -19,7 +19,15 @@ from ..core.gigachat import (
     GigaChatUnavailableError,
     request_lesson_chat_completion,
 )
-from ..core.security import auth_required, hash_password, validate_password
+from ..core.security import (
+    auth_required,
+    clear_parent_access_failures,
+    hash_password,
+    parent_access_allowed,
+    register_parent_access_failure,
+    revoke_refresh_tokens_for_user,
+    validate_password,
+)
 from ..models.learning import (
     Achievement,
     Assignment,
@@ -189,11 +197,38 @@ def _question_is_correct(question: dict, actual) -> bool:
     return False
 
 
-def _compact_progress_report(student: User) -> dict:
-    progresses = UserProgress.query.filter_by(user_id=student.id).all()
+def _normalized_parent_module_whitelist(raw_value) -> set[str] | None:
+    if not isinstance(raw_value, list):
+        return None
+    values = {str(item or '').strip() for item in raw_value if str(item or '').strip()}
+    return values or None
+
+
+def _lesson_allowed_for_parent(lesson: Lesson | None, allowed_module_slugs: set[str] | None) -> bool:
+    if allowed_module_slugs is None:
+        return True
+    return bool(lesson and lesson.module and lesson.module.slug in allowed_module_slugs)
+
+
+def _assignment_allowed_for_parent(assignment: Assignment | None, allowed_module_slugs: set[str] | None) -> bool:
+    if allowed_module_slugs is None:
+        return True
+    return bool(assignment and assignment.lesson and _lesson_allowed_for_parent(assignment.lesson, allowed_module_slugs))
+
+
+def _compact_progress_report(student: User, allowed_module_slugs: set[str] | None = None) -> dict:
+    progresses = [
+        row
+        for row in UserProgress.query.filter_by(user_id=student.id).all()
+        if _lesson_allowed_for_parent(row.lesson, allowed_module_slugs)
+    ]
     completed = [row for row in progresses if row.status == 'completed']
     total_score = sum(row.score for row in completed)
-    assignments = AssignmentSubmission.query.filter_by(student_id=student.id).all()
+    assignments = [
+        row
+        for row in AssignmentSubmission.query.filter_by(student_id=student.id).all()
+        if _assignment_allowed_for_parent(row.assignment, allowed_module_slugs)
+    ]
     return {
         'completed_lessons': len(completed),
         'average_score': round(total_score / len(completed), 1) if completed else 0,
@@ -204,10 +239,18 @@ def _compact_progress_report(student: User) -> dict:
     }
 
 
-def _weekly_activity(student: User) -> list[dict]:
+def _weekly_activity(student: User, allowed_module_slugs: set[str] | None = None) -> list[dict]:
     rows = []
-    progresses = UserProgress.query.filter_by(user_id=student.id).all()
-    assignments = AssignmentSubmission.query.filter_by(student_id=student.id).all()
+    progresses = [
+        row
+        for row in UserProgress.query.filter_by(user_id=student.id).all()
+        if _lesson_allowed_for_parent(row.lesson, allowed_module_slugs)
+    ]
+    assignments = [
+        row
+        for row in AssignmentSubmission.query.filter_by(student_id=student.id).all()
+        if _assignment_allowed_for_parent(row.assignment, allowed_module_slugs)
+    ]
     grouped: dict[str, dict[str, int]] = defaultdict(lambda: {'lessons': 0, 'assignments': 0, 'score_sum': 0, 'score_count': 0})
     for progress in progresses:
         if progress.status == 'completed' and progress.completed_at:
@@ -235,10 +278,12 @@ def _weekly_activity(student: User) -> list[dict]:
     return rows
 
 
-def _module_report(student: User) -> list[dict]:
+def _module_report(student: User, allowed_module_slugs: set[str] | None = None) -> list[dict]:
     modules = Module.query.filter_by(is_published=True, age_group=student.age_group or 'middle').order_by(Module.order_index.asc()).all()
     payload = []
     for module in modules:
+        if allowed_module_slugs is not None and module.slug not in allowed_module_slugs:
+            continue
         completed = 0
         total = len(module.lessons)
         for idx, lesson in enumerate(module.lessons):
@@ -256,9 +301,14 @@ def _module_report(student: User) -> list[dict]:
     return payload
 
 
-def _assignment_summary(student: User) -> list[dict]:
-    submissions = AssignmentSubmission.query.filter_by(student_id=student.id).order_by(AssignmentSubmission.submitted_at.desc()).limit(5).all()
-    return [submission.to_dict() for submission in submissions]
+def _assignment_summary(student: User, allowed_module_slugs: set[str] | None = None) -> list[dict]:
+    submissions = AssignmentSubmission.query.filter_by(student_id=student.id).order_by(AssignmentSubmission.submitted_at.desc()).all()
+    visible_submissions = [
+        submission
+        for submission in submissions
+        if _assignment_allowed_for_parent(submission.assignment, allowed_module_slugs)
+    ]
+    return [submission.to_parent_dict() for submission in visible_submissions[:5]]
 
 
 def _assignment_payload_for_student(student: User, assignment: Assignment, classroom_name: str | None = None) -> dict:
@@ -295,7 +345,6 @@ def bootstrap_public():
 def dashboard(current_user: User):
     progresses = UserProgress.query.filter_by(user_id=current_user.id).all()
     completed_lessons = [item for item in progresses if item.status == 'completed']
-    sync_achievements_for_user(current_user)
     achievements = UserAchievement.query.filter_by(user_id=current_user.id).all()
     assignments = (
         Assignment.query.join(Classroom)
@@ -379,7 +428,9 @@ def module_lessons(current_user: User, module_id: int):
 @student_bp.get('/lessons/<int:lesson_id>')
 @auth_required()
 def get_lesson(current_user: User, lesson_id: int):
-    lesson = Lesson.query.get_or_404(lesson_id)
+    lesson = db.session.get(Lesson, lesson_id)
+    if lesson is None:
+        abort(404)
     if not _user_can_access_lesson(current_user, lesson):
         return {'message': 'У вас нет доступа к этому уроку.'}, 403
     module, idx = _lesson_context(lesson)
@@ -388,17 +439,15 @@ def get_lesson(current_user: User, lesson_id: int):
         state = _effective_lesson_state_for_student(current_user, lesson)
         if state == STATE_MAP['locked']:
             return {'message': 'Сначала завершите предыдущий урок.'}, 403
-    progress = _get_or_create_progress(current_user.id, lesson.id)
-    changed = False
-    if progress.status == 'not_started':
-        progress.status = 'in_progress'
-        changed = True
-    if progress.status == 'in_progress' and progress.started_at is None:
-        _mark_progress_started(progress)
-        changed = True
-    if changed:
-        db.session.commit()
-    return {'lesson': lesson.to_dict(), 'state': state, 'progress': progress.to_dict()}
+    progress = UserProgress.query.filter_by(user_id=current_user.id, lesson_id=lesson.id).first()
+    if progress is None:
+        progress = UserProgress(user_id=current_user.id, lesson_id=lesson.id, status='not_started')
+    return {
+        'lesson': lesson.to_dict(),
+        'state': state,
+        'progress': progress.to_dict(),
+        'viewer_role': current_user.role.value,
+    }
 
 
 @student_bp.post('/lessons/<int:lesson_id>/gigachat')
@@ -612,7 +661,6 @@ def submit_quiz(current_user: User, quiz_id: int):
 @student_bp.get('/achievements')
 @auth_required()
 def list_achievements(current_user: User):
-    sync_achievements_for_user(current_user)
     earned_ids = {item.achievement_id for item in UserAchievement.query.filter_by(user_id=current_user.id).all()}
     achievements = Achievement.query.order_by(Achievement.id.asc()).all()
     return {
@@ -684,7 +732,6 @@ def submit_assignment(current_user: User, assignment_id: int):
 @student_bp.get('/users/me')
 @auth_required()
 def my_profile(current_user: User):
-    sync_achievements_for_user(current_user)
     return {'user': current_user.to_dict(), 'report': _compact_progress_report(current_user)}
 
 
@@ -699,10 +746,11 @@ def update_profile(current_user: User):
     if 'password' in data:
         password = data.get('password') or ''
         if password:
-            password_error = validate_password(password, minimum_length=6)
+            password_error = validate_password(password)
             if password_error:
                 return {'message': password_error}, 400
             current_user.password_hash = hash_password(password)
+            revoke_refresh_tokens_for_user(current_user.id)
     db.session.commit()
     return {'user': current_user.to_dict()}
 
@@ -751,21 +799,27 @@ def update_parent_invite(current_user: User, code: str):
 
 @student_bp.get('/parent/access/<string:code>')
 def parent_access(code: str):
+    if not parent_access_allowed():
+        return {'message': 'Слишком много попыток доступа. Повторите позже.'}, 429
     invite = ParentInvite.query.filter_by(code=code, active=True).first()
     if not invite or invite.is_expired or not invite.student or not invite.student.is_active:
+        register_parent_access_failure()
+        db.session.commit()
         return {'message': 'Ссылка недействительна или истекла.'}, 404
 
     student = invite.student
-    sync_achievements_for_user(student)
+    clear_parent_access_failures()
+    db.session.commit()
+    allowed_module_slugs = _normalized_parent_module_whitelist(invite.modules_whitelist)
     achievements = UserAchievement.query.filter_by(user_id=student.id).order_by(UserAchievement.earned_at.desc()).all()
     return {
-        'invite': invite.to_dict(),
-        'child': student.to_dict(),
-        'summary': _compact_progress_report(student),
-        'weekly_activity': _weekly_activity(student),
-        'modules': _module_report(student),
+        'invite': invite.to_public_dict(),
+        'child': student.to_parent_dict(),
+        'summary': _compact_progress_report(student, allowed_module_slugs),
+        'weekly_activity': _weekly_activity(student, allowed_module_slugs),
+        'modules': _module_report(student, allowed_module_slugs),
         'recent_achievements': [row.achievement.to_dict() for row in achievements[:4]],
-        'recent_assignments': _assignment_summary(student),
+        'recent_assignments': _assignment_summary(student, allowed_module_slugs),
     }
 
 

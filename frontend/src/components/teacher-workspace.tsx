@@ -385,10 +385,10 @@ async function copyToClipboard(value: string) {
   document.body.removeChild(textarea)
 }
 
-export function TeacherWorkspace() {
-  const [overview, setOverview] = useState<TeacherOverviewData | null>(null)
+export function TeacherWorkspace({ initialOverview = null }: { initialOverview?: TeacherOverviewData | null }) {
+  const [overview, setOverview] = useState<TeacherOverviewData | null>(initialOverview)
   const [catalog, setCatalog] = useState<LessonCatalogItem[]>([])
-  const [selectedClassId, setSelectedClassId] = useState<number | null>(null)
+  const [selectedClassId, setSelectedClassId] = useState<number | null>(initialOverview?.classes[0]?.id ?? null)
   const [classDetail, setClassDetail] = useState<TeacherClassDetail | null>(null)
   const [assignmentRows, setAssignmentRows] = useState<AssignmentItem[]>([])
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null)
@@ -702,7 +702,7 @@ export function TeacherWorkspace() {
   }
 
   async function loadOverview() {
-    const data = await api<TeacherOverviewData>('/teacher/overview', undefined, true)
+    const data = await api<TeacherOverviewData>('/teacher/overview', undefined, 'required')
     setOverview(data)
     if (!selectedClassId && data.classes[0]) {
       setSelectedClassId(data.classes[0].id)
@@ -710,15 +710,15 @@ export function TeacherWorkspace() {
   }
 
   async function loadCatalog(classroomId: number) {
-    const data = await api<{ lessons: LessonCatalogItem[] }>(`/teacher/lesson-catalog?classroom_id=${classroomId}`, undefined, true)
+    const data = await api<{ lessons: LessonCatalogItem[] }>(`/teacher/lesson-catalog?classroom_id=${classroomId}`, undefined, 'required')
     setCatalog(data.lessons)
   }
 
   async function loadClassDetails(classroomId: number) {
     const [detail, assignments, nextOverview] = await Promise.all([
-      api<TeacherClassDetail>(`/teacher/classes/${classroomId}`, undefined, true),
-      api<{ assignments: AssignmentItem[] }>(`/teacher/classes/${classroomId}/assignments`, undefined, true),
-      api<TeacherOverviewData>('/teacher/overview', undefined, true),
+      api<TeacherClassDetail>(`/teacher/classes/${classroomId}`, undefined, 'required'),
+      api<{ assignments: AssignmentItem[] }>(`/teacher/classes/${classroomId}/assignments`, undefined, 'required'),
+      api<TeacherOverviewData>('/teacher/overview', undefined, 'required'),
     ])
     setClassDetail(detail)
     setAssignmentRows(assignments.assignments)
@@ -733,8 +733,8 @@ export function TeacherWorkspace() {
 
   async function loadSubmissions(assignmentId: number) {
     const [data, nextOverview] = await Promise.all([
-      api<{ assignment: AssignmentItem; submissions: SubmissionItem[] }>(`/teacher/assignments/${assignmentId}/submissions`, undefined, true),
-      api<TeacherOverviewData>('/teacher/overview', undefined, true),
+      api<{ assignment: AssignmentItem; submissions: SubmissionItem[] }>(`/teacher/assignments/${assignmentId}/submissions`, undefined, 'required'),
+      api<TeacherOverviewData>('/teacher/overview', undefined, 'required'),
     ])
     setSubmissions(data.submissions)
     setFeedbackDrafts(data.submissions.reduce<Record<number, string>>((acc, submission) => {
@@ -746,8 +746,9 @@ export function TeacherWorkspace() {
   }
 
   useEffect(() => {
+    if (initialOverview) return
     loadOverview().catch(() => setMessage('Не удалось загрузить кабинет учителя. Проверьте авторизацию и попробуйте снова.'))
-  }, [])
+  }, [initialOverview])
 
   useEffect(() => {
     if (!selectedClassId) {
@@ -778,7 +779,7 @@ export function TeacherWorkspace() {
 
   async function createClass(event: FormEvent) {
     event.preventDefault()
-    await api('/teacher/classes', { method: 'POST', body: JSON.stringify(classForm) }, true)
+    await api('/teacher/classes', { method: 'POST', body: JSON.stringify(classForm) }, 'required')
     setClassForm({ name: '', description: '' })
     setMessage('Класс создан.')
     await loadOverview()
@@ -841,7 +842,7 @@ export function TeacherWorkspace() {
             memory_limit_mb: lessonForm.evaluation_mode === 'stdin_stdout' ? Number(lessonForm.memory_limit_mb) : null,
           }),
         },
-        true,
+        'required',
       )
       const nextForm = buildEmptyLessonForm(lessonForm.age_group, lessonPracticeMode)
       setLessonForm({

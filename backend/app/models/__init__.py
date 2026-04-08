@@ -1,4 +1,4 @@
-from .user import RefreshToken, User, UserRole
+from .user import RefreshToken, SecurityThrottle, User, UserRole
 from .learning import (
     Achievement,
     Assignment,
@@ -16,6 +16,7 @@ from .learning import (
 
 __all__ = [
     'RefreshToken',
+    'SecurityThrottle',
     'User',
     'UserRole',
     'Achievement',

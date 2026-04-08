@@ -8,13 +8,15 @@ RUN apt-get update \
 
 RUN useradd --create-home --shell /usr/sbin/nologin judge
 
-COPY app.py .
+COPY judge_runner /app/judge_runner
+COPY shared /app/shared
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     JUDGE_RUNNER_HOST=0.0.0.0 \
     JUDGE_RUNNER_PORT=8090
 
 USER judge
 
-CMD ["python", "app.py"]
+CMD ["python", "judge_runner/app.py"]

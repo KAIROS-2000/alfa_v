@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
 from ..core.db import db
@@ -405,7 +406,7 @@ class Lesson(db.Model):
             'custom_classroom_id': self.module.custom_classroom_id,
         }
 
-    def to_dict(self) -> dict:
+    def to_dict(self, include_private: bool = False) -> dict:
         return {
             **self.to_summary_dict(),
             'module': self.module.to_dict(include_lessons=True),
@@ -413,7 +414,7 @@ class Lesson(db.Model):
             'theory_blocks': self.theory_blocks,
             'interactive_steps': self.interactive_steps,
             'tasks': [task.to_dict() for task in self.tasks],
-            'quizzes': [quiz.to_dict() for quiz in self.quizzes],
+            'quizzes': [quiz.to_dict(include_private=include_private) for quiz in self.quizzes],
         }
 
 
@@ -486,12 +487,20 @@ class Quiz(db.Model):
 
     lesson = db.relationship('Lesson', back_populates='quizzes')
 
-    def to_dict(self) -> dict:
+    def to_dict(self, include_private: bool = False) -> dict:
+        questions = []
+        for item in self.questions:
+            if not isinstance(item, dict):
+                continue
+            question = dict(item)
+            if not include_private:
+                question.pop('correct', None)
+            questions.append(question)
         return {
             'id': self.id,
             'title': self.title,
             'passing_score': self.passing_score,
-            'questions': self.questions,
+            'questions': questions,
             'xp_reward': self.xp_reward,
         }
 
@@ -524,6 +533,10 @@ class Classroom(db.Model):
 
 class ClassMembership(db.Model):
     __tablename__ = 'class_memberships'
+    __table_args__ = (
+        UniqueConstraint('classroom_id', 'student_id', name='uq_class_membership_classroom_student'),
+        Index('ix_class_membership_student_classroom', 'student_id', 'classroom_id'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'), nullable=False)
@@ -536,6 +549,10 @@ class ClassMembership(db.Model):
 
 class Assignment(db.Model):
     __tablename__ = 'assignments'
+    __table_args__ = (
+        Index('ix_assignment_classroom_created_at', 'classroom_id', 'created_at'),
+        Index('ix_assignment_lesson', 'lesson_id'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'), nullable=False)
@@ -572,6 +589,11 @@ class Assignment(db.Model):
 
 class AssignmentSubmission(db.Model):
     __tablename__ = 'assignment_submissions'
+    __table_args__ = (
+        UniqueConstraint('assignment_id', 'student_id', name='uq_assignment_submission_assignment_student'),
+        Index('ix_assignment_submission_assignment_submitted', 'assignment_id', 'submitted_at'),
+        Index('ix_assignment_submission_student_submitted', 'student_id', 'submitted_at'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     assignment_id = db.Column(db.Integer, db.ForeignKey('assignments.id'), nullable=False)
@@ -598,9 +620,25 @@ class AssignmentSubmission(db.Model):
             'submitted_at': self.submitted_at.isoformat(),
         }
 
+    def to_parent_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'assignment_id': self.assignment_id,
+            'assignment_title': self.assignment.title if self.assignment else None,
+            'score': self.score,
+            'status': self.status,
+            'feedback': self.feedback,
+            'submitted_at': self.submitted_at.isoformat(),
+        }
+
 
 class UserProgress(db.Model):
     __tablename__ = 'user_progress'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'lesson_id', name='uq_user_progress_user_lesson'),
+        Index('ix_user_progress_user_status', 'user_id', 'status'),
+        Index('ix_user_progress_lesson_status', 'lesson_id', 'status'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -656,6 +694,10 @@ class Achievement(db.Model):
 
 class UserAchievement(db.Model):
     __tablename__ = 'user_achievements'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'achievement_id', name='uq_user_achievement_user_achievement'),
+        Index('ix_user_achievement_user_earned_at', 'user_id', 'earned_at'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -668,6 +710,9 @@ class UserAchievement(db.Model):
 
 class ParentInvite(db.Model):
     __tablename__ = 'parent_invites'
+    __table_args__ = (
+        Index('ix_parent_invite_student_active', 'student_id', 'active'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -700,4 +745,13 @@ class ParentInvite(db.Model):
             'modules_whitelist': self.modules_whitelist,
             'expires_at': self.expires_at.isoformat() if self.expires_at else None,
             'created_at': self.created_at.isoformat(),
+        }
+
+    def to_public_dict(self) -> dict:
+        return {
+            'label': self.label,
+            'active': self.active,
+            'weekly_limit_minutes': self.weekly_limit_minutes,
+            'modules_whitelist': self.modules_whitelist,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
         }

@@ -3,7 +3,6 @@ from __future__ import annotations
 from flask import Blueprint, request
 from sqlalchemy import or_
 
-from ..core.assignment_sync import backfill_assignment_submissions_for_assignment, backfill_assignment_submissions_for_assignments
 from ..core.db import db
 from ..core.security import auth_required
 from ..models.learning import (
@@ -24,13 +23,13 @@ from ..models.learning import (
     normalize_task_validation,
 )
 from ..models.user import User, UserRole
+from ..services.teacher_query_service import TeacherQueryService
 from ..seed.bootstrap import generate_code
 
 
 teacher_bp = Blueprint('teacher', __name__)
 VALID_AGE_GROUPS = {'junior', 'middle', 'senior'}
 VALID_DIFFICULTIES = {'easy', 'medium', 'hard'}
-REVIEWED_SUBMISSION_STATUSES = {'checked', 'needs_revision'}
 VALID_SUBMISSION_REVIEW_STATUSES = {'checked', 'needs_revision'}
 ASSIGNMENT_TYPE_DEFAULT_TITLES = {
     'lesson_practice': 'Практика по уроку',
@@ -172,39 +171,10 @@ def _catalog_lessons_for_teacher(current_user: User, classroom: Classroom | None
     )
 
 
-def _assignment_with_stats(assignment: Assignment, submissions: list[AssignmentSubmission] | None = None) -> dict:
-    rows = submissions if submissions is not None else AssignmentSubmission.query.filter_by(assignment_id=assignment.id).all()
-    return {
-        **assignment.to_dict(),
-        'submissions_count': len(rows),
-        'checked_count': len([row for row in rows if row.status in REVIEWED_SUBMISSION_STATUSES]),
-    }
-
-
-def _sync_assignment_stats(assignments: list[Assignment]) -> None:
-    if backfill_assignment_submissions_for_assignments(assignments):
-        db.session.commit()
-
-
 @teacher_bp.get('/overview')
 @auth_required([UserRole.TEACHER])
 def teacher_overview(current_user: User):
-    classes = _teacher_classes(current_user)
-    assignments = [assignment for classroom in classes for assignment in classroom.assignments]
-    _sync_assignment_stats(assignments)
-    total_students = sum(len(item.members) for item in classes)
-    assignment_stats = [_assignment_with_stats(assignment) for assignment in assignments]
-    total_assignments = len(assignments)
-    total_submissions = sum(item['submissions_count'] for item in assignment_stats)
-    return {
-        'summary': {
-            'classes': len(classes),
-            'students': total_students,
-            'assignments': total_assignments,
-            'submissions': total_submissions,
-        },
-        'classes': [item.to_dict() for item in classes],
-    }
+    return TeacherQueryService().overview_payload(current_user)
 
 
 @teacher_bp.post('/classes')
@@ -232,23 +202,7 @@ def list_classes(current_user: User):
 @teacher_bp.get('/classes/<int:classroom_id>')
 @auth_required([UserRole.TEACHER])
 def class_detail(current_user: User, classroom_id: int):
-    classroom = Classroom.query.filter_by(id=classroom_id, teacher_id=current_user.id).first_or_404()
-    _sync_assignment_stats(list(classroom.assignments))
-    students = []
-    for membership in classroom.members:
-        progress_rows = UserProgress.query.filter_by(user_id=membership.student.id).all()
-        completed = [row for row in progress_rows if row.status == 'completed']
-        students.append({
-            'id': membership.student.id,
-            'username': membership.student.username,
-            'full_name': membership.student.full_name,
-            'xp': membership.student.xp,
-            'level': membership.student.level,
-            'completed_lessons': len(completed),
-            'average_score': round(sum(row.score for row in completed) / len(completed), 1) if completed else 0,
-        })
-    assignments = [_assignment_with_stats(assignment) for assignment in classroom.assignments]
-    return {'classroom': classroom.to_dict(), 'students': students, 'assignments': assignments}
+    return TeacherQueryService().class_detail_payload(current_user, classroom_id)
 
 
 def _sync_lesson_progress_from_review(submission: AssignmentSubmission) -> None:
@@ -382,7 +336,7 @@ def create_class_lesson(current_user: User, classroom_id: int):
         )
 
     db.session.commit()
-    return {'lesson': lesson.to_dict(), 'catalog_item': _lesson_catalog_item(lesson)}, 201
+    return {'lesson': lesson.to_dict(include_private=True), 'catalog_item': _lesson_catalog_item(lesson)}, 201
 
 
 @teacher_bp.post('/classes/<int:classroom_id>/assignments')
@@ -421,25 +375,16 @@ def create_assignment(current_user: User, classroom_id: int):
 @teacher_bp.get('/classes/<int:classroom_id>/assignments')
 @auth_required([UserRole.TEACHER])
 def list_assignments(current_user: User, classroom_id: int):
-    classroom = Classroom.query.filter_by(id=classroom_id, teacher_id=current_user.id).first_or_404()
-    _sync_assignment_stats(list(classroom.assignments))
-    assignments = [_assignment_with_stats(assignment) for assignment in classroom.assignments]
-    return {'assignments': assignments}
+    return TeacherQueryService().class_assignments_payload(current_user, classroom_id)
 
 
 @teacher_bp.get('/assignments/<int:assignment_id>/submissions')
 @auth_required([UserRole.TEACHER])
 def assignment_submissions(current_user: User, assignment_id: int):
-    assignment = Assignment.query.get_or_404(assignment_id)
-    if assignment.classroom.teacher_id != current_user.id:
+    try:
+        return TeacherQueryService().assignment_submissions_payload(current_user, assignment_id)
+    except PermissionError:
         return {'message': 'Forbidden'}, 403
-    if backfill_assignment_submissions_for_assignment(assignment):
-        db.session.commit()
-    submissions = AssignmentSubmission.query.filter_by(assignment_id=assignment.id).order_by(AssignmentSubmission.submitted_at.desc()).all()
-    return {
-        'assignment': _assignment_with_stats(assignment, submissions),
-        'submissions': [submission.to_dict() for submission in submissions],
-    }
 
 
 @teacher_bp.patch('/submissions/<int:submission_id>/grade')

@@ -108,7 +108,7 @@ export function ParentDashboard({ data }: { data: ParentAccessData }) {
             {data.recent_assignments.map((item) => (
               <div key={item.id} className="rounded-2xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-black text-slate-900">{item.student_username}</p>
+                  <p className="font-black text-slate-900">{item.assignment_title || 'Последняя сдача'}</p>
                   <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700">{item.score}%</span>
                 </div>
                 <p className="mt-2 text-sm text-slate-600">Статус: {submissionStatusLabel(item.status)}</p>

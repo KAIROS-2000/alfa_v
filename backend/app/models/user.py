@@ -3,6 +3,8 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 
+from sqlalchemy import UniqueConstraint
+
 from ..core.db import db
 from ..core.gamification import level_from_xp, rank_title, xp_to_next_level
 
@@ -72,6 +74,14 @@ class User(db.Model):
             'is_active': self.is_active,
         }
 
+    def to_parent_dict(self) -> dict:
+        return {
+            'full_name': self.full_name,
+            'age_group': self.age_group,
+            'level': self.level,
+            'rank_title': self.rank_title,
+        }
+
 
 class RefreshToken(db.Model):
     __tablename__ = 'refresh_tokens'
@@ -83,3 +93,24 @@ class RefreshToken(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
     user = db.relationship('User', back_populates='refresh_tokens')
+
+
+class SecurityThrottle(db.Model):
+    __tablename__ = 'security_throttles'
+    __table_args__ = (
+        UniqueConstraint('scope', 'subject', 'ip_address', name='uq_security_throttle_scope_subject_ip'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    scope = db.Column(db.String(64), nullable=False, index=True)
+    subject = db.Column(db.String(255), nullable=False, default='')
+    ip_address = db.Column(db.String(64), nullable=False, default='')
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+    window_started_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
+    blocked_until = db.Column(db.DateTime(timezone=True), nullable=True)
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )

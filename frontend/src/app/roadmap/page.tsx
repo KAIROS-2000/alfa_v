@@ -58,7 +58,7 @@ export default function RoadmapPage() {
       })
       .catch((e) => {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Не удалось загрузить roadmap')
+          setError(e instanceof Error ? e.message : 'Не удалось загрузить уроки')
         }
       })
       .finally(() => {
@@ -79,7 +79,7 @@ export default function RoadmapPage() {
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold uppercase tracking-[0.24em] text-sky-600">Карта модулей</p>
-            <h1 className="mt-2 break-words text-3xl font-black leading-tight text-slate-900 sm:text-4xl">Roadmap обучения</h1>
+            <h1 className="mt-2 break-words text-3xl font-black leading-tight text-slate-900 sm:text-4xl">Уроки обучения</h1>
           </div>
           <div className="flex w-full flex-wrap gap-3 sm:w-auto">
             {[
@@ -96,7 +96,7 @@ export default function RoadmapPage() {
         {error ? (
           <div className="codequest-card p-6 text-rose-700">{error}</div>
         ) : loading || !group ? (
-          <div className="codequest-card p-6">Загружаем roadmap...</div>
+          <div className="codequest-card p-6">Загружаем уроки...</div>
         ) : (
           <RoadmapPunsons title={`Возрастная группа ${GROUP_LABELS[group] || group}`} modules={modules} />
         )}

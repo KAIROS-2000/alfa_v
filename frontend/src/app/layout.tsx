@@ -4,12 +4,12 @@ import { ThemeHydrator } from '@/components/theme-hydrator'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Кодиумс',
-  description: 'Кодиумс — обучающая платформа для школьников по программированию',
+  title: 'Progyx',
+  description: 'Progyx — обучающая платформа для школьников по программированию',
   icons: {
-    icon: '/kodiums-logo.png',
-    shortcut: '/kodiums-logo.png',
-    apple: '/kodiums-logo.png',
+    icon: '/progyx-logo.png',
+    shortcut: '/progyx-logo.png',
+    apple: '/progyx-logo.png',
   },
 }
 

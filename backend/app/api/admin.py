@@ -3,12 +3,20 @@ from __future__ import annotations
 from flask import Blueprint, request
 
 from ..core.db import db
-from ..core.security import auth_required, hash_password, validate_password
+from ..core.security import (
+    ADMIN_PASSWORD_MIN_LENGTH,
+    auth_required,
+    hash_password,
+    revoke_refresh_tokens_for_user,
+    validate_password,
+)
 from ..models.learning import (
     Lesson,
     Module,
     Quiz,
     Task,
+    Assignment,
+    ParentInvite,
     age_group_supports_code,
     has_explicit_code_task_intent,
     normalize_task_validation,
@@ -80,6 +88,15 @@ def _insert_position(module: Module, raw_position) -> int:
     for lesson in ordered[position - 1:]:
         lesson.order_index += 1
     return position
+
+
+def _normalize_module_order() -> list[Module]:
+    ordered = Module.query.order_by(Module.order_index.asc(), Module.id.asc()).all()
+    roadmap_modules = [module for module in ordered if not module.is_custom_classroom_module]
+    for index, module in enumerate(roadmap_modules, start=1):
+        module.order_index = index
+    db.session.flush()
+    return roadmap_modules
 
 
 def _build_theory_blocks(title: str, summary: str, theory_text: str, key_points: list[str]) -> list[dict]:
@@ -420,7 +437,7 @@ def create_module_lesson(current_user: User, module_id: int):
 
     db.session.commit()
     return {
-        'lesson': lesson.to_dict(),
+        'lesson': lesson.to_dict(include_private=True),
         'roadmap_visible': bool(module.is_published and lesson.is_published),
         'module': module.to_dict(include_lessons=True),
     }, 201
@@ -432,7 +449,7 @@ def create_admin(current_user: User):
     data = request.get_json() or {}
     email = (data.get('email') or '').strip().lower()
     password = data.get('password') or ''
-    password_error = validate_password(password, minimum_length=8)
+    password_error = validate_password(password, minimum_length=ADMIN_PASSWORD_MIN_LENGTH)
     if not email:
         return {'message': 'Укажите email нового администратора.'}, 400
     if password_error:
@@ -462,6 +479,7 @@ def block_admin(current_user: User, user_id: int):
     if user.role != UserRole.ADMIN:
         return {'message': 'Можно блокировать только обычных админов'}, 400
     user.is_active = False
+    revoke_refresh_tokens_for_user(user.id)
     db.session.commit()
     return {'user': user.to_dict()}
 
@@ -483,6 +501,7 @@ def delete_admin(current_user: User, user_id: int):
     user = User.query.get_or_404(user_id)
     if user.role != UserRole.ADMIN:
         return {'message': 'Можно удалять только обычных админов'}, 400
+    revoke_refresh_tokens_for_user(user.id)
     db.session.delete(user)
     db.session.commit()
     return {'message': 'Админ удалён'}

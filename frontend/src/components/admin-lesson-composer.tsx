@@ -481,7 +481,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
   async function createLesson(event: FormEvent) {
     event.preventDefault()
     if (!selectedModule) {
-      onMessage('Сначала создайте хотя бы один обычный модуль для roadmap.')
+      onMessage('Сначала создайте хотя бы один обычный модуль для уроков.')
       return
     }
     if (!form.title.trim() || !form.summary.trim()) {
@@ -572,8 +572,8 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
       }))
       onMessage(
         data.roadmap_visible
-          ? 'Урок создан и уже попадёт в roadmap выбранной возрастной группы.'
-          : 'Урок создан, но модуль пока скрыт от roadmap. Включите публикацию модуля.',
+          ? 'Урок создан и уже попадёт в раздел уроков выбранной возрастной группы.'
+          : 'Урок создан, но модуль пока скрыт из раздела уроков. Включите публикацию модуля.',
       )
       await onReload().catch(() => undefined)
     } catch (error) {
@@ -586,7 +586,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
       <section className="codequest-card p-6">
         <p className="text-sm font-bold uppercase tracking-[0.2em] text-violet-600">Конструктор урока</p>
         <p className="mt-4 text-sm leading-6 text-slate-600">
-          Сначала создайте обычный модуль. После этого сюда можно будет добавить урок в любую позицию roadmap, практику и итоговый квиз.
+          Сначала создайте обычный модуль. После этого сюда можно будет добавить урок в любую позицию в уроках, практику и итоговый квиз.
         </p>
       </section>
     )
@@ -624,7 +624,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
         >
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-sm font-bold uppercase tracking-[0.22em] text-emerald-100">Новый урок в roadmap</p>
+              <p className="text-sm font-bold uppercase tracking-[0.22em] text-emerald-100">Новый урок в разделе уроков</p>
               <h3 className="mt-3 text-3xl font-black">Добавьте урок в нужное место</h3>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-sky-50/90">
                 Урок можно вставить в любое место модуля, сразу собрать практику, настроить автопроверку кода и добавить итоговый квиз.
@@ -633,7 +633,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
             <div className="flex flex-wrap gap-2 text-xs font-semibold">
               <span className="rounded-full bg-white/12 px-3 py-2 backdrop-blur">{selectedModule?.title}</span>
               <span className="rounded-full bg-white/12 px-3 py-2 backdrop-blur">{selectedModule?.age_group}</span>
-              <span className="rounded-full bg-white/12 px-3 py-2 backdrop-blur">{roadmapVisible ? 'Будет в roadmap' : 'Скрыт до публикации'}</span>
+              <span className="rounded-full bg-white/12 px-3 py-2 backdrop-blur">{roadmapVisible ? 'Будет в уроках' : 'Скрыт до публикации'}</span>
             </div>
           </div>
         </div>
@@ -641,7 +641,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
         <div className="flex flex-wrap items-start gap-6 p-6">
           <div className="min-w-0 flex-[999_1_46rem] space-y-5">
             <section className="rounded-[26px] border border-slate-200 bg-slate-50/80 p-5">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">1. Позиция в roadmap</p>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">1. Позиция в уроках</p>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <select className="rounded-2xl border border-slate-200 px-4 py-3" value={form.module_id} onChange={(event) => handleModuleChange(event.target.value)}>
                   {catalogModules.map((module) => (
@@ -672,7 +672,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
                   onChange={(event) => setForm({ ...form, publish_module_if_needed: event.target.checked })}
                 />
                 <span>
-                  Если модуль ещё не опубликован, сразу открыть его для roadmap.
+                  Если модуль ещё не опубликован, сразу открыть его для уроков.
                   <span className="mt-1 block text-xs text-slate-500">
                     Сейчас модуль {selectedModule?.is_published ? 'уже опубликован' : 'скрыт от учеников'}.
                   </span>
@@ -739,7 +739,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
 
               {form.practice_mode === 'none' ? (
                 <div className="mt-4 rounded-[22px] border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
-                  Урок сохранится без встроенной практики. В roadmap останутся теория, разбор и при желании итоговый квиз.
+                Урок сохранится без встроенной практики. В уроках останутся теория, разбор и при желании итоговый квиз.
                 </div>
               ) : (
                 <div className="mt-4 space-y-4">
@@ -956,7 +956,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
                 <p className="text-sm font-bold uppercase tracking-[0.18em] text-slate-500">Финальный шаг</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   После сохранения урок сразу окажется в выбранной позиции модуля.
-                  {roadmapVisible ? ' Для учеников он будет виден в roadmap.' : ' Пока модуль не опубликован, roadmap его не покажет.'}
+                  {roadmapVisible ? ' Для учеников он будет виден в уроках.' : ' Пока модуль не опубликован, раздел уроков его не покажет.'}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -999,7 +999,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
                   <p className="mt-1">{form.quiz_enabled ? `${form.quiz_questions.filter(questionHasContent).length} вопрос(ов)` : 'Не добавлен'}</p>
                 </div>
                 <div className="rounded-2xl bg-white/10 px-4 py-3">
-                  <p className="font-semibold text-white">Roadmap</p>
+                  <p className="font-semibold text-white">Уроки</p>
                   <p className="mt-1">{roadmapVisible ? 'Урок появится у учеников' : 'Нужно опубликовать модуль'}</p>
                 </div>
               </div>
@@ -1008,7 +1008,7 @@ export function AdminLessonComposer({ modules, onMessage, onReload }: AdminLesso
             <div className="rounded-[26px] border border-slate-200 bg-slate-50 p-5">
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Советы</p>
               <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
-                <li>Если урок должен сразу выйти в roadmap, оставьте включённой публикацию модуля.</li>
+                <li>Если урок должен сразу выйти в уроках, оставьте включённой публикацию модуля.</li>
                 <li>Для кода используйте короткие тесты с явным ожидаемым выводом.</li>
                 <li>В квизах с порядком правильная последовательность должна содержать те же строки, что и исходный список.</li>
                 <li>В вопросах на сопоставление достаточно заполнить пары, список справа соберётся автоматически.</li>

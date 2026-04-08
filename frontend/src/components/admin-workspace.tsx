@@ -15,14 +15,31 @@ interface OverviewData {
   }
 }
 
+interface AdminWorkspaceInitialData {
+  overview?: OverviewData | null
+  modules?: ModuleItem[]
+  users?: UserItem[]
+}
+
 function hasPasswordWhitespace(value: string) {
   return /\s/.test(value)
 }
 
-export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
-  const [overview, setOverview] = useState<OverviewData | null>(null)
-  const [modules, setModules] = useState<ModuleItem[]>([])
-  const [users, setUsers] = useState<UserItem[]>([])
+export function AdminWorkspace({
+  superMode = false,
+  initialData,
+}: {
+  superMode?: boolean
+  initialData?: AdminWorkspaceInitialData
+}) {
+  const hasInitialPayload = Boolean(
+    initialData?.overview
+    && Array.isArray(initialData?.modules)
+    && (!superMode || Array.isArray(initialData?.users)),
+  )
+  const [overview, setOverview] = useState<OverviewData | null>(initialData?.overview || null)
+  const [modules, setModules] = useState<ModuleItem[]>(initialData?.modules ?? [])
+  const [users, setUsers] = useState<UserItem[]>(initialData?.users ?? [])
   const [message, setMessage] = useState('')
   const [moduleForm, setModuleForm] = useState({ slug: '', title: '', description: '', age_group: 'middle', color: '#4A90D9' })
   const [adminForm, setAdminForm] = useState({ full_name: '', email: '', username: '', password: '' })
@@ -31,13 +48,13 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
 
   async function load() {
     const [overviewData, modulesData] = await Promise.all([
-      api<OverviewData>('/admin/overview', undefined, true),
-      api<{ modules: ModuleItem[] }>('/admin/modules', undefined, true),
+      api<OverviewData>('/admin/overview', undefined, 'required'),
+      api<{ modules: ModuleItem[] }>('/admin/modules', undefined, 'required'),
     ])
     setOverview(overviewData)
     setModules(modulesData.modules)
     try {
-      const usersData = await api<{ users: UserItem[] }>('/admin/users', undefined, true)
+      const usersData = await api<{ users: UserItem[] }>('/admin/users', undefined, 'required')
       setUsers(usersData.users)
     } catch {
       setUsers([])
@@ -45,19 +62,20 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
   }
 
   useEffect(() => {
+    if (hasInitialPayload) return
     load().catch(() => setMessage('Не удалось загрузить админ-панель. Проверьте права доступа и авторизацию.'))
-  }, [])
+  }, [hasInitialPayload])
 
   async function createModule(event: FormEvent) {
     event.preventDefault()
-    await api('/admin/modules', { method: 'POST', body: JSON.stringify({ ...moduleForm, is_published: false }) }, true)
+    await api('/admin/modules', { method: 'POST', body: JSON.stringify({ ...moduleForm, is_published: false }) }, 'required')
     setModuleForm({ slug: '', title: '', description: '', age_group: 'middle', color: '#4A90D9' })
     setMessage('Модуль создан.')
     await load()
   }
 
   async function toggleModule(moduleId: number, isPublished: boolean) {
-    await api(`/admin/modules/${moduleId}`, { method: 'PATCH', body: JSON.stringify({ is_published: !isPublished }) }, true)
+    await api(`/admin/modules/${moduleId}`, { method: 'PATCH', body: JSON.stringify({ is_published: !isPublished }) }, 'required')
     await load()
   }
 
@@ -71,7 +89,7 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
     if (!confirmed) return
 
     try {
-      const response = await api<{ message: string }>(`/admin/modules/${module.id}`, { method: 'DELETE' }, true)
+      const response = await api<{ message: string }>(`/admin/modules/${module.id}`, { method: 'DELETE' }, 'required')
       setMessage(response.message || 'Модуль удалён.')
       await load()
     } catch (error) {
@@ -81,22 +99,22 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
 
   async function createAdmin(event: FormEvent) {
     event.preventDefault()
-    if (adminForm.password.length < 8) {
-      setMessage('Пароль должен содержать не менее 8 символов.')
+    if (adminForm.password.length < 12) {
+      setMessage('Пароль должен содержать не менее 12 символов.')
       return
     }
     if (hasPasswordWhitespace(adminForm.password)) {
       setMessage('Пароль не должен содержать пробелы.')
       return
     }
-    await api('/admin/admins', { method: 'POST', body: JSON.stringify(adminForm) }, true)
+    await api('/admin/admins', { method: 'POST', body: JSON.stringify(adminForm) }, 'required')
     setAdminForm({ full_name: '', email: '', username: '', password: '' })
     setMessage('Админ создан.')
     await load()
   }
 
   async function changeAdminState(userId: number, action: 'block' | 'unblock' | 'delete') {
-    await api(`/admin/admins/${userId}${action === 'delete' ? '' : `/${action}`}`, { method: action === 'delete' ? 'DELETE' : 'PATCH' }, true)
+    await api(`/admin/admins/${userId}${action === 'delete' ? '' : `/${action}`}`, { method: action === 'delete' ? 'DELETE' : 'PATCH' }, 'required')
     setMessage(`Действие ${action} выполнено.`)
     await load()
   }
@@ -145,7 +163,7 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
                   <input className="rounded-2xl border border-slate-200 px-4 py-3" placeholder="Email" value={adminForm.email} onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} />
                   <input className="rounded-2xl border border-slate-200 px-4 py-3" placeholder="Username" value={adminForm.username} onChange={(e) => setAdminForm({ ...adminForm, username: e.target.value })} />
                 </div>
-                <input className="rounded-2xl border border-slate-200 px-4 py-3" placeholder="Пароль (минимум 8 символов, без пробелов)" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} />
+                <input className="rounded-2xl border border-slate-200 px-4 py-3" placeholder="Пароль (минимум 12 символов, строчные/заглавные буквы, цифра, спецсимвол)" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} />
               </div>
               <button className="mt-4 rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white">Создать админа</button>
             </form>
@@ -161,7 +179,7 @@ export function AdminWorkspace({ superMode = false }: { superMode?: boolean }) {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-lg font-black text-slate-900">{module.title}</p>
-                      <p className="text-sm text-slate-500">{module.age_group} · {module.lessons.length} уроков · {module.is_published ? 'в roadmap' : 'скрыт'}</p>
+                      <p className="text-sm text-slate-500">{module.age_group} · {module.lessons.length} уроков · {module.is_published ? 'в уроках' : 'скрыт'}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button onClick={() => toggleModule(module.id, module.is_published)} className={`rounded-full px-4 py-2 text-sm font-semibold ${module.is_published ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-900 text-white'}`}>
