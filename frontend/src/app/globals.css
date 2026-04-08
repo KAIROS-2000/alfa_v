@@ -186,6 +186,11 @@ html[data-theme='dark'] [class*='bg-white/90'] {
   background-color: var(--surface-overlay-strong) !important;
 }
 
+html[data-theme='dark'] [class*='bg-white/95'],
+html[data-theme='dark'] [class*='bg-white/85'] {
+  background-color: rgba(22, 27, 34, 0.94) !important;
+}
+
 html[data-theme='dark'] [class*='bg-white/80'],
 html[data-theme='dark'] [class*='bg-white/70'] {
   background-color: var(--surface-overlay-soft) !important;
