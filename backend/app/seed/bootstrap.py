@@ -977,7 +977,7 @@ def seed_parent_invite() -> None:
         ParentInvite(
             student_id=student.id,
             code=parent_code,
-            label='Семейный кабинет',
+            label='Родительский кабинет',
             weekly_limit_minutes=180,
             modules_whitelist=['middle-python-intro', 'middle-conditions'],
             expires_at=ParentInvite.next_month_expiry(),

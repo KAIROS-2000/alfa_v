@@ -16,6 +16,9 @@ class UserRole(enum.Enum):
     SUPERADMIN = 'superadmin'
 
 
+USERNAME_MAX_LENGTH = 10
+
+
 class User(db.Model):
     __tablename__ = 'users'
 
@@ -30,6 +33,7 @@ class User(db.Model):
     streak = db.Column(db.Integer, nullable=False, default=1)
     theme = db.Column(db.String(20), nullable=False, default='light')
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    session_version = db.Column(db.Integer, nullable=False, default=0)
     last_login_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False)
 
@@ -41,6 +45,10 @@ class User(db.Model):
 
     def touch_login(self) -> None:
         self.last_login_at = datetime.now(UTC)
+
+    def bump_session_version(self) -> int:
+        self.session_version = int(self.session_version or 0) + 1
+        return self.session_version
 
     def add_xp(self, value: int) -> None:
         self.xp += max(value, 0)

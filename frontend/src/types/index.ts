@@ -129,6 +129,7 @@ export interface QuizQuestion {
   items?: string[]
   left?: string[]
   right?: string[]
+  correct?: number[] | string[] | Record<string, string>
 }
 
 export interface QuizItem {

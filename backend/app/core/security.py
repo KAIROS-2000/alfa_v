@@ -15,6 +15,7 @@ from ..models.user import RefreshToken, SecurityThrottle, User, UserRole
 
 ACCESS_COOKIE_NAME = 'codequest_access_token'
 REFRESH_COOKIE_NAME = 'codequest_refresh_token'
+ACCESS_EXPIRES_AT_COOKIE_NAME = 'codequest_access_expires_at'
 DEFAULT_PASSWORD_MIN_LENGTH = 10
 ADMIN_PASSWORD_MIN_LENGTH = 12
 LOGIN_THROTTLE_SCOPE = 'login'
@@ -207,9 +208,11 @@ def clear_parent_access_failures(ip_address: str | None = None) -> None:
 
 def create_token_pair(user: User) -> dict:
     now = datetime.now(UTC)
+    session_version = int(user.session_version or 0)
     access_payload = {
         'sub': str(user.id),
         'role': user.role.value,
+        'session_version': session_version,
         'type': 'access',
         'iat': int(now.timestamp()),
         'exp': int((now + timedelta(minutes=current_app.config['ACCESS_TOKEN_MINUTES'])).timestamp()),
@@ -218,6 +221,7 @@ def create_token_pair(user: User) -> dict:
     refresh_payload = {
         'sub': str(user.id),
         'role': user.role.value,
+        'session_version': session_version,
         'type': 'refresh',
         'jti': refresh_id,
         'iat': int(now.timestamp()),
@@ -260,13 +264,40 @@ def _token_max_age(token: str, fallback_seconds: int) -> int:
     return max(exp - int(datetime.now(UTC).timestamp()), 0)
 
 
+def _token_expiration(token: str) -> int | None:
+    try:
+        payload = _decode_token_without_verification(token)
+    except Exception:
+        return None
+    exp = payload.get('exp')
+    return exp if isinstance(exp, int) else None
+
+
+def _payload_session_version(payload: dict) -> int | None:
+    raw_value = payload.get('session_version', 0)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def token_matches_user_session(payload: dict, user: User) -> bool:
+    session_version = _payload_session_version(payload)
+    if session_version is None:
+        return False
+    return session_version == int(user.session_version or 0)
+
+
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> Response:
     secure = bool(current_app.config.get('SESSION_COOKIE_SECURE', current_app.config.get('IS_PRODUCTION', False)))
     same_site = current_app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
+    access_cookie_max_age = _token_max_age(access_token, int(current_app.config['ACCESS_TOKEN_MINUTES']) * 60)
+    refresh_cookie_max_age = _token_max_age(refresh_token, int(current_app.config['REFRESH_TOKEN_DAYS']) * 24 * 60 * 60)
+    access_expires_at = _token_expiration(access_token)
     response.set_cookie(
         ACCESS_COOKIE_NAME,
         access_token,
-        max_age=_token_max_age(access_token, int(current_app.config['ACCESS_TOKEN_MINUTES']) * 60),
+        max_age=access_cookie_max_age,
         httponly=True,
         secure=secure,
         samesite=same_site,
@@ -275,8 +306,16 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str) 
     response.set_cookie(
         REFRESH_COOKIE_NAME,
         refresh_token,
-        max_age=_token_max_age(refresh_token, int(current_app.config['REFRESH_TOKEN_DAYS']) * 24 * 60 * 60),
+        max_age=refresh_cookie_max_age,
         httponly=True,
+        secure=secure,
+        samesite=same_site,
+        path='/',
+    )
+    response.set_cookie(
+        ACCESS_EXPIRES_AT_COOKIE_NAME,
+        str(access_expires_at or ''),
+        max_age=access_cookie_max_age,
         secure=secure,
         samesite=same_site,
         path='/',
@@ -289,6 +328,7 @@ def clear_auth_cookies(response: Response) -> Response:
     same_site = current_app.config.get('SESSION_COOKIE_SAMESITE', 'Lax')
     response.delete_cookie(ACCESS_COOKIE_NAME, path='/', secure=secure, httponly=True, samesite=same_site)
     response.delete_cookie(REFRESH_COOKIE_NAME, path='/', secure=secure, httponly=True, samesite=same_site)
+    response.delete_cookie(ACCESS_EXPIRES_AT_COOKIE_NAME, path='/', secure=secure, samesite=same_site)
     return response
 
 
@@ -361,10 +401,14 @@ def auth_required(roles: list[UserRole] | None = None) -> Callable:
                     raise ValueError('Not access token')
                 user = db.session.get(User, int(payload['sub']))
             except Exception:
-                return {'message': 'Invalid token'}, 401
+                return {'message': 'Недействительный токен сессии.', 'code': 'invalid_token'}, 401
 
-            if not user or not user.is_active:
-                return {'message': 'User not found or blocked'}, 403
+            if not user:
+                return {'message': 'Сессия больше недействительна.', 'code': 'session_revoked'}, 401
+            if not user.is_active:
+                return {'message': 'Пользователь заблокирован.', 'code': 'user_blocked'}, 401
+            if not token_matches_user_session(payload, user):
+                return {'message': 'Сессия была отозвана. Войдите снова.', 'code': 'session_revoked'}, 401
             if roles and user.role not in roles:
                 return {'message': 'Forbidden'}, 403
             return func(user, *args, **kwargs)

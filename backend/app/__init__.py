@@ -17,6 +17,7 @@ from .api.teacher import teacher_bp
 from .cli import register_commands
 from .core.config import Config
 from .core.db import db
+from .core.runtime_schema import ensure_runtime_schema
 from .core.security import request_origin_allowed
 
 SPRITE_DIR = Path(__file__).resolve().parent.parent / "sprite"
@@ -110,6 +111,8 @@ def create_app() -> Flask:
 
     with app.app_context():
         from . import models  # noqa: F401
+
+        ensure_runtime_schema()
 
     register_commands(app)
     _register_request_metrics(app)

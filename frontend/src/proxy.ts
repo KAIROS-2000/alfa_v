@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+import { AUTH_ROUTE_PREFIXES, pathMatches } from '@/lib/auth-routes'
 import { INTERNAL_API_URL } from '@/lib/server-env'
 
 type UserRole = 'student' | 'teacher' | 'admin' | 'superadmin'
 
 const ACCESS_COOKIE = 'codequest_access_token'
 const REFRESH_COOKIE = 'codequest_refresh_token'
+const ACCESS_EXPIRES_AT_COOKIE = 'codequest_access_expires_at'
 const KNOWN_ROLES: UserRole[] = ['student', 'teacher', 'admin', 'superadmin']
-const AUTH_ROUTES = ['/auth/login', '/auth/register']
 const ROLE_RULES: Array<{ path: string; roles: UserRole[] }> = [
 	{ path: '/dashboard', roles: KNOWN_ROLES },
 	{ path: '/roadmap', roles: KNOWN_ROLES },
@@ -18,10 +19,6 @@ const ROLE_RULES: Array<{ path: string; roles: UserRole[] }> = [
 	{ path: '/admin', roles: ['admin', 'superadmin'] },
 	{ path: '/superadmin', roles: ['superadmin'] },
 ]
-
-function pathMatches(pathname: string, target: string) {
-	return pathname === target || pathname.startsWith(`${target}/`)
-}
 
 function isKnownRole(value: string | undefined): value is UserRole {
 	return !!value && KNOWN_ROLES.includes(value as UserRole)
@@ -48,7 +45,16 @@ function authCookieHeader(request: NextRequest) {
 function clearAuthCookies(response: NextResponse) {
 	response.cookies.delete(ACCESS_COOKIE)
 	response.cookies.delete(REFRESH_COOKIE)
+	response.cookies.delete(ACCESS_EXPIRES_AT_COOKIE)
 	return response
+}
+
+function decodeBase64Url(value: string) {
+	const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+	const padded = normalized + '='.repeat((4 - (normalized.length % 4 || 4)) % 4)
+	const binary = atob(padded)
+	const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+	return new TextDecoder().decode(bytes)
 }
 
 function upstreamSetCookies(response: Response) {
@@ -69,25 +75,27 @@ function applyUpstreamAuthCookies(target: NextResponse, upstream: Response) {
 	return target
 }
 
-async function fetchSession(request: NextRequest) {
-	const cookieHeader = authCookieHeader(request)
-	if (!cookieHeader) return null
+function accessRoleFromRequest(request: NextRequest) {
+	const accessToken = request.cookies.get(ACCESS_COOKIE)?.value?.trim()
+	if (!accessToken) return null
 
 	try {
-		const response = await fetch(`${INTERNAL_API_URL}/auth/me`, {
-			headers: {
-				accept: 'application/json',
-				cookie: cookieHeader,
-			},
-			cache: 'no-store',
-		})
-		if (!response.ok) {
+		const [, payloadSegment] = accessToken.split('.')
+		if (!payloadSegment) {
 			return null
 		}
-		const data = (await response.json().catch(() => ({}))) as {
-			user?: { role?: string }
+
+		const payload = JSON.parse(decodeBase64Url(payloadSegment)) as {
+			role?: string
+			type?: string
+			exp?: number
 		}
-		return isKnownRole(data.user?.role) ? data.user.role : null
+
+		if (payload.type !== 'access' || !isKnownRole(payload.role) || typeof payload.exp !== 'number') {
+			return null
+		}
+
+		return payload.exp > Math.floor(Date.now() / 1000) ? payload.role : null
 	} catch {
 		return null
 	}
@@ -123,14 +131,14 @@ async function refreshSession(request: NextRequest) {
 
 export async function proxy(request: NextRequest) {
 	const pathname = request.nextUrl.pathname
-	const isAuthRoute = AUTH_ROUTES.some((route) => pathMatches(pathname, route))
+	const isAuthRoute = AUTH_ROUTE_PREFIXES.some((route) => pathMatches(pathname, route))
 	const roleRule = ROLE_RULES.find((rule) => pathMatches(pathname, rule.path))
 
 	if (!isAuthRoute && !roleRule) {
 		return NextResponse.next()
 	}
 
-	const currentRole = await fetchSession(request)
+	const currentRole = accessRoleFromRequest(request)
 	if (currentRole) {
 		if (isAuthRoute) {
 			return NextResponse.redirect(dashboardUrl(request))

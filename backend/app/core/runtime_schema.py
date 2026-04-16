@@ -12,14 +12,18 @@ def _timestamp_sql_type() -> str:
 
 def ensure_runtime_schema() -> None:
     inspector = inspect(db.engine)
-    if 'user_progress' not in inspector.get_table_names():
-        return
+    table_names = set(inspector.get_table_names())
 
-    progress_columns = {column['name'] for column in inspector.get_columns('user_progress')}
-    if 'started_at' in progress_columns:
-        return
+    if 'user_progress' in table_names:
+        progress_columns = {column['name'] for column in inspector.get_columns('user_progress')}
+        if 'started_at' not in progress_columns:
+            with db.engine.begin() as connection:
+                connection.execute(text(f'ALTER TABLE user_progress ADD COLUMN started_at {_timestamp_sql_type()}'))
+            current_app.logger.info('Added missing user_progress.started_at column.')
 
-    with db.engine.begin() as connection:
-        connection.execute(text(f'ALTER TABLE user_progress ADD COLUMN started_at {_timestamp_sql_type()}'))
-
-    current_app.logger.info('Added missing user_progress.started_at column.')
+    if 'users' in table_names:
+        user_columns = {column['name'] for column in inspector.get_columns('users')}
+        if 'session_version' not in user_columns:
+            with db.engine.begin() as connection:
+                connection.execute(text('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0'))
+            current_app.logger.info('Added missing users.session_version column.')

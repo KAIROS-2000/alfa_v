@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, request
 
 from ..core.db import db
+from .lesson_builder import build_lesson_quiz
 from ..core.security import (
     ADMIN_PASSWORD_MIN_LENGTH,
     auth_required,
@@ -13,7 +14,6 @@ from ..core.security import (
 from ..models.learning import (
     Lesson,
     Module,
-    Quiz,
     Task,
     Assignment,
     ParentInvite,
@@ -21,12 +21,11 @@ from ..models.learning import (
     has_explicit_code_task_intent,
     normalize_task_validation,
 )
-from ..models.user import User, UserRole
+from ..models.user import User, UserRole, USERNAME_MAX_LENGTH
 from ..seed.bootstrap import generate_code
 
 
 admin_bp = Blueprint('admin', __name__)
-VALID_QUIZ_QUESTION_TYPES = {'single', 'multiple', 'order', 'match', 'text'}
 
 
 def _safe_int(value, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -122,110 +121,6 @@ def _generate_module_lesson_slug(module: Module) -> str:
             return slug
 
 
-def _normalize_quiz_questions(raw_questions) -> list[dict]:
-    if not isinstance(raw_questions, list):
-        return []
-
-    normalized: list[dict] = []
-    for index, item in enumerate(raw_questions, start=1):
-        if not isinstance(item, dict):
-            continue
-        qtype = str(item.get('type') or 'single').strip().lower()
-        prompt = str(item.get('prompt') or '').strip()
-        if qtype not in VALID_QUIZ_QUESTION_TYPES or not prompt:
-            continue
-
-        question_id = f'admin-q{index}'
-
-        if qtype in {'single', 'multiple'}:
-            options = _string_list(item.get('options'))
-            if len(options) < 2:
-                continue
-            raw_correct = item.get('correct')
-            raw_indices = raw_correct if isinstance(raw_correct, list) else [raw_correct]
-            correct_indices: list[int] = []
-            for raw_value in raw_indices:
-                try:
-                    parsed = int(raw_value)
-                except (TypeError, ValueError):
-                    continue
-                if 0 <= parsed < len(options) and parsed not in correct_indices:
-                    correct_indices.append(parsed)
-            if qtype == 'single':
-                if len(correct_indices) != 1:
-                    continue
-                correct = [correct_indices[0]]
-            else:
-                if not correct_indices:
-                    continue
-                correct = sorted(correct_indices)
-            normalized.append({
-                'id': question_id,
-                'type': qtype,
-                'prompt': prompt,
-                'options': options,
-                'correct': correct,
-            })
-            continue
-
-        if qtype == 'order':
-            items = _string_list(item.get('items'))
-            correct = _string_list(item.get('correct'))
-            if len(items) < 2 or len(correct) != len(items) or sorted(correct) != sorted(items):
-                continue
-            normalized.append({
-                'id': question_id,
-                'type': qtype,
-                'prompt': prompt,
-                'items': items,
-                'correct': correct,
-            })
-            continue
-
-        if qtype == 'match':
-            raw_pairs = item.get('pairs')
-            if not isinstance(raw_pairs, list):
-                continue
-            pairs: list[tuple[str, str]] = []
-            right_values: list[str] = []
-            correct_map: dict[str, str] = {}
-            for pair in raw_pairs:
-                if not isinstance(pair, dict):
-                    continue
-                left = str(pair.get('left') or '').strip()
-                right = str(pair.get('right') or '').strip()
-                if not left or not right or left in correct_map:
-                    continue
-                correct_map[left] = right
-                pairs.append((left, right))
-                if right not in right_values:
-                    right_values.append(right)
-            if len(pairs) < 2 or len(right_values) < 2:
-                continue
-            normalized.append({
-                'id': question_id,
-                'type': qtype,
-                'prompt': prompt,
-                'left': [left for left, _ in pairs],
-                'right': right_values,
-                'correct': correct_map,
-            })
-            continue
-
-        if qtype == 'text':
-            correct_answers = _string_list(item.get('correct'))
-            if not correct_answers:
-                continue
-            normalized.append({
-                'id': question_id,
-                'type': qtype,
-                'prompt': prompt,
-                'correct': correct_answers,
-            })
-
-    return normalized
-
-
 def _build_task(lesson: Lesson, raw_task, lesson_title: str) -> Task | None:
     if not isinstance(raw_task, dict) or not raw_task.get('enabled'):
         return None
@@ -278,25 +173,6 @@ def _build_task(lesson: Lesson, raw_task, lesson_title: str) -> Task | None:
         hints=hints,
         xp_reward=_safe_int(raw_task.get('xp_reward'), 30, minimum=0, maximum=500),
     )
-
-
-def _build_quiz(lesson: Lesson, raw_quiz, lesson_title: str) -> Quiz | None:
-    if not isinstance(raw_quiz, dict) or not raw_quiz.get('enabled'):
-        return None
-
-    questions = _normalize_quiz_questions(raw_quiz.get('questions'))
-    if not questions:
-        raise ValueError('Добавьте хотя бы один корректный вопрос в итоговый квиз.')
-
-    return Quiz(
-        lesson_id=lesson.id,
-        title=str(raw_quiz.get('title') or '').strip() or f'Квиз: {lesson_title}',
-        passing_score=_safe_int(raw_quiz.get('passing_score'), 70, minimum=0, maximum=100),
-        questions=questions,
-        xp_reward=_safe_int(raw_quiz.get('xp_reward'), 50, minimum=0, maximum=500),
-    )
-
-
 @admin_bp.get('/overview')
 @auth_required([UserRole.ADMIN, UserRole.SUPERADMIN])
 def overview(current_user: User):
@@ -428,7 +304,7 @@ def create_module_lesson(current_user: User, module_id: int):
         task = _build_task(lesson, data.get('task'), title)
         if task is not None:
             db.session.add(task)
-        quiz = _build_quiz(lesson, data.get('quiz'), title)
+        quiz = build_lesson_quiz(lesson, data.get('quiz'), title, question_prefix='admin-q')
         if quiz is not None:
             db.session.add(quiz)
     except ValueError as exc:
@@ -456,6 +332,8 @@ def create_admin(current_user: User):
         return {'message': password_error}, 400
 
     username = (data.get('username') or email.split('@')[0]).strip().lower()
+    if len(username) > USERNAME_MAX_LENGTH:
+        return {'message': f'Логин должен содержать не более {USERNAME_MAX_LENGTH} символов.'}, 400
     if User.query.filter((User.email == email) | (User.username == username)).first():
         return {'message': 'Пользователь уже существует'}, 409
     admin = User(
@@ -479,6 +357,7 @@ def block_admin(current_user: User, user_id: int):
     if user.role != UserRole.ADMIN:
         return {'message': 'Можно блокировать только обычных админов'}, 400
     user.is_active = False
+    user.bump_session_version()
     revoke_refresh_tokens_for_user(user.id)
     db.session.commit()
     return {'user': user.to_dict()}

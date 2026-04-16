@@ -1,6 +1,5 @@
 import { serverApi } from '@/lib/server-api'
-import { LessonCreationWizard } from '@/components/lesson-creation-wizard'
-import { SiteHeader } from '@/components/site-header'
+import { TeacherLessonBuilder } from '@/components/teacher-lesson-builder'
 import { TeacherOverviewData } from '@/types'
 
 interface TeacherLessonCreationPageProps {
@@ -18,8 +17,7 @@ export default async function TeacherLessonCreationPage({ searchParams }: Teache
 
   return (
     <main>
-      <SiteHeader />
-      <LessonCreationWizard
+      <TeacherLessonBuilder
         initialClasses={initialOverview?.classes || []}
         initialClassId={Number.isFinite(initialClassId) ? initialClassId : null}
         sourceLessonId={Number.isFinite(sourceLessonId) ? sourceLessonId : null}

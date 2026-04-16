@@ -1,6 +1,7 @@
 'use client'
 
 import { api } from '@/lib/api'
+import { showErrorToast, showSuccessToast } from '@/lib/toast'
 import {
 	AssignmentItem,
 	ClassroomItem,
@@ -82,6 +83,16 @@ interface AssignmentFormState {
 	success_criteria: string
 	resources: string
 }
+
+type AssignmentRequiredField =
+	| 'title'
+	| 'lesson_id'
+	| 'due_date'
+	| 'learning_goal'
+	| 'resources'
+	| 'work_steps'
+	| 'success_criteria'
+	| 'description'
 
 interface AssignmentTemplate {
 	label: string
@@ -203,6 +214,37 @@ const EMPTY_ASSIGNMENT_FORM: AssignmentFormState = {
 	work_steps: '',
 	success_criteria: '',
 	resources: '',
+}
+
+const ASSIGNMENT_REQUIRED_FIELD_LABELS: Record<
+	AssignmentRequiredField,
+	string
+> = {
+	title: 'название задания',
+	lesson_id: 'урок',
+	due_date: 'дедлайн',
+	learning_goal: 'цель обучения',
+	resources: 'материалы',
+	work_steps: 'шаги выполнения',
+	success_criteria: 'критерии успеха',
+	description: 'описание задания',
+}
+
+function getMissingAssignmentFields(
+	form: AssignmentFormState,
+): AssignmentRequiredField[] {
+	const missing: AssignmentRequiredField[] = []
+
+	if (!form.title.trim()) missing.push('title')
+	if (!form.lesson_id.trim()) missing.push('lesson_id')
+	if (!form.due_date.trim()) missing.push('due_date')
+	if (!form.learning_goal.trim()) missing.push('learning_goal')
+	if (!form.resources.trim()) missing.push('resources')
+	if (!form.work_steps.trim()) missing.push('work_steps')
+	if (!form.success_criteria.trim()) missing.push('success_criteria')
+	if (!form.description.trim()) missing.push('description')
+
+	return missing
 }
 
 function defaultProgrammingLanguage(
@@ -501,7 +543,6 @@ export function TeacherWorkspace({
 	const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, string>>(
 		{},
 	)
-	const [message, setMessage] = useState('')
 	const [classForm, setClassForm] = useState({ name: '', description: '' })
 	const [assignmentForm, setAssignmentForm] = useState<AssignmentFormState>(
 		EMPTY_ASSIGNMENT_FORM,
@@ -522,6 +563,22 @@ export function TeacherWorkspace({
 		() => catalog.filter(lesson => lesson.source === 'teacher'),
 		[catalog],
 	)
+	const createLessonHref = selectedClassId
+		? `/teacher/lessons/create?classId=${selectedClassId}`
+		: '/teacher/lessons/create'
+	const missingAssignmentFields = useMemo(
+		() => getMissingAssignmentFields(assignmentForm),
+		[assignmentForm],
+	)
+	const missingAssignmentFieldLabels = useMemo(
+		() =>
+			missingAssignmentFields.map(
+				field => ASSIGNMENT_REQUIRED_FIELD_LABELS[field],
+			),
+		[missingAssignmentFields],
+	)
+	const canCreateAssignment =
+		Boolean(selectedClassId) && missingAssignmentFields.length === 0
 	const selectedLessonForAssignment = useMemo(
 		() =>
 			catalog.find(lesson => String(lesson.id) === assignmentForm.lesson_id) ||
@@ -645,7 +702,6 @@ export function TeacherWorkspace({
 		(lessonProgress.filter(item => item.done).length / lessonProgress.length) *
 			100,
 	)
-	const messageIsError = /^не удалось|^ошибка/i.test(message.trim())
 	const reviewedCount = submissions.filter(item =>
 		REVIEWED_SUBMISSION_STATUSES.has(item.status),
 	).length
@@ -665,9 +721,9 @@ export function TeacherWorkspace({
 	async function handleCopyClassCode(code: string) {
 		try {
 			await copyToClipboard(code)
-			setMessage(`Код класса ${code} скопирован.`)
+			showSuccessToast(`Код класса ${code} скопирован.`)
 		} catch {
-			setMessage('Не удалось скопировать код класса.')
+			showErrorToast('Не удалось скопировать код класса.')
 		}
 	}
 
@@ -1004,7 +1060,7 @@ export function TeacherWorkspace({
 	useEffect(() => {
 		if (initialOverview) return
 		loadOverview().catch(() =>
-			setMessage(
+			showErrorToast(
 				'Не удалось загрузить кабинет учителя. Проверьте авторизацию и попробуйте снова.',
 			),
 		)
@@ -1022,7 +1078,7 @@ export function TeacherWorkspace({
 			loadClassDetails(selectedClassId),
 			loadCatalog(selectedClassId),
 		]).catch(() => {
-			setMessage('Не удалось загрузить уроки и задания выбранного класса.')
+			showErrorToast('Не удалось загрузить уроки и задания выбранного класса.')
 		})
 	}, [selectedClassId])
 
@@ -1040,40 +1096,55 @@ export function TeacherWorkspace({
 
 	async function createClass(event: FormEvent) {
 		event.preventDefault()
-		await api(
-			'/teacher/classes',
-			{ method: 'POST', body: JSON.stringify(classForm) },
-			'required',
-		)
-		setClassForm({ name: '', description: '' })
-		setMessage('Класс создан.')
-		await loadOverview()
+		try {
+			await api(
+				'/teacher/classes',
+				{ method: 'POST', body: JSON.stringify(classForm) },
+				'required',
+			)
+			setClassForm({ name: '', description: '' })
+			showSuccessToast('Класс создан.')
+			await loadOverview()
+		} catch (error) {
+			showErrorToast(error instanceof Error ? error.message : 'Не удалось создать класс.')
+		}
 	}
 
 	async function createAssignment(event: FormEvent) {
 		event.preventDefault()
-		if (!selectedClassId) return
-		await api(
-			`/teacher/classes/${selectedClassId}/assignments`,
-			{
-				method: 'POST',
-				body: JSON.stringify({
-					...assignmentForm,
-					lesson_id: assignmentForm.lesson_id
-						? Number(assignmentForm.lesson_id)
-						: null,
-				}),
-			},
-			true,
-		)
-		setAssignmentForm(current => ({
-			...EMPTY_ASSIGNMENT_FORM,
-			assignment_type: current.assignment_type,
-			submission_format: current.submission_format,
-			lesson_id: current.lesson_id,
-		}))
-		setMessage('Задание назначено классу.')
-		await loadClassDetails(selectedClassId)
+		if (!selectedClassId) {
+			showErrorToast('Сначала выберите класс, для которого создается задание.')
+			return
+		}
+		if (missingAssignmentFields.length > 0) {
+			showErrorToast(
+				`Заполните обязательные поля: ${missingAssignmentFieldLabels.join(', ')}.`,
+			)
+			return
+		}
+		try {
+			await api(
+				`/teacher/classes/${selectedClassId}/assignments`,
+				{
+					method: 'POST',
+					body: JSON.stringify({
+						...assignmentForm,
+						lesson_id: Number(assignmentForm.lesson_id),
+					}),
+				},
+				true,
+			)
+			setAssignmentForm(current => ({
+				...EMPTY_ASSIGNMENT_FORM,
+				assignment_type: current.assignment_type,
+				submission_format: current.submission_format,
+				lesson_id: current.lesson_id,
+			}))
+			showSuccessToast('Задание назначено классу.')
+			await loadClassDetails(selectedClassId)
+		} catch (error) {
+			showErrorToast(error instanceof Error ? error.message : 'Не удалось назначить задание классу.')
+		}
 	}
 
 	async function gradeSubmission(
@@ -1082,63 +1153,50 @@ export function TeacherWorkspace({
 		currentScore: number,
 		currentFeedback?: string | null,
 	) {
-		await api(
-			`/teacher/submissions/${submissionId}/grade`,
-			{
-				method: 'PATCH',
-				body: JSON.stringify({
-					score: currentScore,
-					feedback:
-						currentFeedback ||
-						(status === 'checked'
-							? 'Урок выполнен верно.'
-							: 'Нужно доработать и отправить ещё раз.'),
-					status,
-				}),
-			},
-			true,
-		)
-		setMessage(
-			status === 'checked'
-				? 'Урок отмечен как выполненный.'
-				: 'Урок отправлен на доработку.',
-		)
-		if (selectedAssignmentId) {
-			await loadSubmissions(selectedAssignmentId)
+		try {
+			await api(
+				`/teacher/submissions/${submissionId}/grade`,
+				{
+					method: 'PATCH',
+					body: JSON.stringify({
+						score: currentScore,
+						feedback:
+							currentFeedback ||
+							(status === 'checked'
+								? 'Урок выполнен верно.'
+								: 'Нужно доработать и отправить ещё раз.'),
+						status,
+					}),
+				},
+				true,
+			)
+			showSuccessToast(
+				status === 'checked'
+					? 'Урок отмечен как выполненный.'
+					: 'Урок отправлен на доработку.',
+			)
+			if (selectedAssignmentId) {
+				await loadSubmissions(selectedAssignmentId)
+			}
+		} catch (error) {
+			showErrorToast(error instanceof Error ? error.message : 'Не удалось обновить статус сдачи.')
 		}
 	}
 
 	return (
-		<div className='space-y-6'>
-			{message && (
-				<div
-					className={`codequest-card p-4 text-sm font-semibold ${messageIsError ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}
-				>
-					{message}
-				</div>
-			)}
-
-			<section className='grid gap-4 sm:grid-cols-2 xl:grid-cols-4'>
-				{[
-					['Классы', String(overview?.summary.classes || 0)],
-					['Ученики', String(overview?.summary.students || 0)],
-					['Задания', String(overview?.summary.assignments || 0)],
-					['Сдачи', String(overview?.summary.submissions || 0)],
-				].map(([label, value]) => (
-					<div key={label} className='codequest-card p-5'>
-						<p className='text-sm font-bold uppercase tracking-[0.18em] text-slate-500'>
-							{label}
-						</p>
-						<p className='mt-3 text-3xl font-black text-slate-900 sm:text-4xl'>
-							{value}
-						</p>
-					</div>
-				))}
-			</section>
-
-			<section className='grid gap-6 2xl:grid-cols-[0.9fr_1.1fr]'>
+		<div className='teacher-workspace space-y-6'>
+			<Link
+				href={createLessonHref}
+				className='teacher-create-button fixed right-4 top-24 z-40 inline-flex min-h-12 items-center justify-center rounded-full bg-sky-600 px-5 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(14,165,233,0.28)] transition hover:-translate-y-0.5 hover:bg-sky-700 hover:shadow-[0_20px_44px_rgba(14,165,233,0.34)] sm:right-6 lg:right-8 2xl:right-[max(2rem,calc((100vw-96rem)/2+2rem))]'
+			>
+				Создать урок
+			</Link>
+			<section className='teacher-workspace__layout grid gap-6 xl:grid-cols-[0.92fr_1.08fr]'>
 				<div className='space-y-6'>
-					<form onSubmit={createClass} className='codequest-card p-6'>
+					<form
+						onSubmit={createClass}
+						className='teacher-workspace__panel codequest-card p-6'
+					>
 						<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
 							Новый класс
 						</p>
@@ -1165,7 +1223,7 @@ export function TeacherWorkspace({
 						</div>
 					</form>
 
-					<div className='codequest-card p-6'>
+					<div className='teacher-workspace__panel codequest-card p-6'>
 						<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
 							Мои классы
 						</p>
@@ -1173,7 +1231,7 @@ export function TeacherWorkspace({
 							{overview?.classes.map(item => (
 								<div
 									key={item.id}
-									className={`rounded-2xl border px-4 py-4 ${selectedClassId === item.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-800'}`}
+									className={`teacher-workspace__item rounded-2xl border px-4 py-4 ${selectedClassId === item.id ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-800'}`}
 								>
 									<div className='flex flex-wrap items-start justify-between gap-3'>
 										<button
@@ -1215,7 +1273,7 @@ export function TeacherWorkspace({
 						</div>
 					</div>
 
-					<section className='codequest-card p-6'>
+					<section className='teacher-workspace__panel codequest-card p-6'>
 						<div className='flex flex-wrap items-center justify-between gap-3'>
 							<div className='min-w-0'>
 								<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
@@ -1242,7 +1300,7 @@ export function TeacherWorkspace({
 								classDetail.students.map(student => (
 									<div
 										key={student.id}
-										className='rounded-2xl border border-slate-200 bg-slate-50 p-4'
+										className='teacher-workspace__item rounded-2xl border border-slate-200 bg-slate-50 p-4'
 									>
 										<div className='flex flex-wrap items-start justify-between gap-3'>
 											<div>
@@ -1280,7 +1338,7 @@ export function TeacherWorkspace({
 				</div>
 
 				<div className='space-y-6'>
-					<section className='codequest-card p-6'>
+					<section className='teacher-workspace__panel codequest-card p-6'>
 						<div className='flex flex-wrap items-center justify-between gap-3'>
 							<div className='min-w-0'>
 								<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
@@ -1338,7 +1396,7 @@ export function TeacherWorkspace({
 						</div>
 					</section>
 
-					<section className='codequest-card p-6'>
+					<section className='teacher-workspace__panel codequest-card p-6'>
 						<div className='flex flex-wrap items-center justify-between gap-3'>
 							<div>
 								<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
@@ -1362,7 +1420,7 @@ export function TeacherWorkspace({
 							{paginatedLessons.map(lesson => (
 								<div
 									key={lesson.id}
-									className={`rounded-2xl border p-4 ${lesson.source === 'teacher' ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}
+									className={`teacher-workspace__item rounded-2xl border p-4 ${lesson.source === 'teacher' ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}
 								>
 									<div className='flex flex-wrap items-start justify-between gap-3'>
 										<div>
@@ -1446,7 +1504,7 @@ export function TeacherWorkspace({
 					<form
 						id='assignment-builder'
 						onSubmit={createAssignment}
-						className='codequest-card p-6'
+						className='teacher-workspace__panel codequest-card p-6'
 					>
 						<div className='flex flex-wrap items-center justify-between gap-3'>
 							<div>
@@ -1478,7 +1536,7 @@ export function TeacherWorkspace({
 												ASSIGNMENT_TEMPLATES[type].submission_format,
 										}))
 									}
-									className={`rounded-2xl border p-4 text-left transition ${assignmentForm.assignment_type === type ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+									className={`teacher-workspace__item rounded-2xl border p-4 text-left transition ${assignmentForm.assignment_type === type ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
 								>
 									<p className='text-base font-black text-slate-900'>
 										{ASSIGNMENT_TEMPLATES[type].label}
@@ -1505,13 +1563,27 @@ export function TeacherWorkspace({
 								</p>
 							)}
 						</div>
+						{!canCreateAssignment ? (
+							<div className='mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'>
+								{selectedClassId ? (
+									<p>
+										Чтобы создать задание, заполните все обязательные поля и
+										обязательно выберите урок.
+									</p>
+								) : (
+									<p>Сначала выберите класс, а затем заполните форму задания.</p>
+								)}
+							</div>
+						) : null}
 
 						<p className='mt-6 text-sm font-bold uppercase tracking-[0.18em] text-slate-500'>
 							2. Основные параметры
 						</p>
 						<div className='mt-3 grid gap-3 md:grid-cols-2'>
 							<input
-								className='rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('title')}
+								className={`rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('title') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Название задания'
 								value={assignmentForm.title}
 								onChange={e =>
@@ -1522,7 +1594,9 @@ export function TeacherWorkspace({
 								}
 							/>
 							<select
-								className='rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('lesson_id')}
+								className={`rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('lesson_id') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								value={assignmentForm.lesson_id}
 								onChange={e =>
 									setAssignmentForm({
@@ -1531,7 +1605,7 @@ export function TeacherWorkspace({
 									})
 								}
 							>
-								<option value=''>Без привязки к уроку</option>
+								<option value=''>Выберите урок для задания</option>
 								{catalog.map(lesson => (
 									<option key={lesson.id} value={lesson.id}>
 										[{lesson.source === 'teacher' ? 'Ваш урок' : 'Каталог'}]{' '}
@@ -1540,7 +1614,9 @@ export function TeacherWorkspace({
 								))}
 							</select>
 							<input
-								className='rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('due_date')}
+								className={`rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('due_date') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								type='date'
 								value={assignmentForm.due_date}
 								onChange={e =>
@@ -1550,7 +1626,7 @@ export function TeacherWorkspace({
 									})
 								}
 							/>
-							<div className='grid grid-cols-2 gap-3'>
+							<div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
 								<select
 									className='rounded-2xl border border-slate-200 px-4 py-3'
 									value={assignmentForm.difficulty}
@@ -1593,7 +1669,9 @@ export function TeacherWorkspace({
 						</p>
 						<div className='mt-3 grid gap-3 md:grid-cols-2'>
 							<textarea
-								className='min-h-24 rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('learning_goal')}
+								className={`min-h-24 rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('learning_goal') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Цель обучения'
 								value={assignmentForm.learning_goal}
 								onChange={e =>
@@ -1604,7 +1682,9 @@ export function TeacherWorkspace({
 								}
 							/>
 							<textarea
-								className='min-h-24 rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('resources')}
+								className={`min-h-24 rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('resources') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Материалы и ссылки (каждая строка отдельно)'
 								value={assignmentForm.resources}
 								onChange={e =>
@@ -1615,7 +1695,9 @@ export function TeacherWorkspace({
 								}
 							/>
 							<textarea
-								className='min-h-28 rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('work_steps')}
+								className={`min-h-28 rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('work_steps') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Шаги выполнения (каждый шаг с новой строки)'
 								value={assignmentForm.work_steps}
 								onChange={e =>
@@ -1626,7 +1708,9 @@ export function TeacherWorkspace({
 								}
 							/>
 							<textarea
-								className='min-h-28 rounded-2xl border border-slate-200 px-4 py-3'
+								required
+								aria-invalid={missingAssignmentFields.includes('success_criteria')}
+								className={`min-h-28 rounded-2xl border px-4 py-3 ${missingAssignmentFields.includes('success_criteria') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Критерии успеха (каждый пункт с новой строки)'
 								value={assignmentForm.success_criteria}
 								onChange={e =>
@@ -1637,7 +1721,9 @@ export function TeacherWorkspace({
 								}
 							/>
 							<textarea
-								className='min-h-28 rounded-2xl border border-slate-200 px-4 py-3 md:col-span-2'
+								required
+								aria-invalid={missingAssignmentFields.includes('description')}
+								className={`min-h-28 rounded-2xl border px-4 py-3 md:col-span-2 ${missingAssignmentFields.includes('description') ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}
 								placeholder='Описание задания'
 								value={assignmentForm.description}
 								onChange={e =>
@@ -1669,8 +1755,8 @@ export function TeacherWorkspace({
 								Дополнить пустые поля
 							</button>
 							<button
-								disabled={!selectedClassId}
-								className='rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50'
+								disabled={!canCreateAssignment}
+								className='rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50'
 							>
 								Добавить задание
 							</button>
@@ -1678,7 +1764,7 @@ export function TeacherWorkspace({
 					</form>
 
 					<section className='grid gap-6 xl:grid-cols-[0.9fr_1.1fr]'>
-						<div className='codequest-card p-6'>
+						<div className='teacher-workspace__panel codequest-card p-6'>
 							<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
 								Задания класса
 							</p>
@@ -1688,7 +1774,7 @@ export function TeacherWorkspace({
 										key={assignment.id}
 										type='button'
 										onClick={() => setSelectedAssignmentId(assignment.id)}
-										className={`w-full rounded-2xl border px-4 py-4 text-left ${selectedAssignmentId === assignment.id ? 'border-sky-600 bg-sky-50' : 'border-slate-200 bg-white'}`}
+										className={`teacher-workspace__item w-full rounded-2xl border px-4 py-4 text-left ${selectedAssignmentId === assignment.id ? 'border-sky-600 bg-sky-50' : 'border-slate-200 bg-white'}`}
 									>
 										<div className='flex flex-wrap items-start justify-between gap-3'>
 											<div>
@@ -1725,7 +1811,7 @@ export function TeacherWorkspace({
 							</div>
 						</div>
 
-						<div className='codequest-card p-6'>
+						<div className='teacher-workspace__panel codequest-card p-6'>
 							<p className='text-sm font-bold uppercase tracking-[0.2em] text-emerald-600'>
 								Проверка сдач
 							</p>
@@ -1733,7 +1819,7 @@ export function TeacherWorkspace({
 								{submissions.map(submission => (
 									<div
 										key={submission.id}
-										className='rounded-2xl border border-slate-200 bg-slate-50 p-4'
+										className='teacher-workspace__item rounded-2xl border border-slate-200 bg-slate-50 p-4'
 									>
 										<div className='flex flex-wrap items-start justify-between gap-3'>
 											<div>

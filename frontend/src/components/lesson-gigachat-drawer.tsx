@@ -6,6 +6,8 @@ import gsap from 'gsap'
 import { Bot, Send, Sparkles, X } from 'lucide-react'
 
 import { api } from '@/lib/api'
+import { usePrefersReducedMotion } from '@/hooks/use-user-page-motion'
+import { showErrorToast } from '@/lib/toast'
 import { LessonChatMessage, LessonGigaChatResponse } from '@/types'
 
 gsap.registerPlugin(useGSAP)
@@ -56,9 +58,9 @@ export function LessonGigachatDrawer({
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<DrawerMessage[]>([])
   const [prompt, setPrompt] = useState('')
-  const [error, setError] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [modelLabel, setModelLabel] = useState('GigaChat')
+  const prefersReducedMotion = usePrefersReducedMotion()
 
   const panelRef = useRef<HTMLDivElement | null>(null)
   const overlayRef = useRef<HTMLButtonElement | null>(null)
@@ -123,7 +125,6 @@ export function LessonGigachatDrawer({
   useEffect(() => {
     setMessages(welcomeMessages)
     setPrompt('')
-    setError('')
     setIsSending(false)
     setIsOpen(false)
     setModelLabel('GigaChat')
@@ -147,6 +148,10 @@ export function LessonGigachatDrawer({
     setClosedState()
     gsap.set(overlay, { autoAlpha: 0, pointerEvents: 'none' })
 
+    if (prefersReducedMotion) {
+      return
+    }
+
     const floatTween = trigger
       ? gsap.to(trigger, {
           y: -6,
@@ -160,7 +165,7 @@ export function LessonGigachatDrawer({
     return () => {
       floatTween?.kill()
     }
-  }, { dependencies: [lessonId] })
+  }, { dependencies: [lessonId, prefersReducedMotion] })
 
   useEffect(() => {
     const panel = panelRef.current
@@ -173,6 +178,23 @@ export function LessonGigachatDrawer({
         ease: isOpen ? 'power3.out' : 'power2.inOut',
       },
     })
+
+    if (prefersReducedMotion) {
+      if (isOpen) {
+        gsap.set(overlay, { autoAlpha: 1, pointerEvents: 'auto' })
+        gsap.set(panel, { xPercent: 0, yPercent: 0 })
+      } else {
+        gsap.set(overlay, { autoAlpha: 0, pointerEvents: 'none' })
+        gsap.set(panel, {
+          xPercent: isMobile ? 0 : 108,
+          yPercent: isMobile ? 104 : 0,
+        })
+      }
+
+      return () => {
+        timeline.kill()
+      }
+    }
 
     if (isOpen) {
       gsap.set(overlay, { pointerEvents: 'auto' })
@@ -210,7 +232,7 @@ export function LessonGigachatDrawer({
     return () => {
       timeline.kill()
     }
-  }, [isOpen])
+  }, [isOpen, prefersReducedMotion])
 
   useEffect(() => {
     if (!isOpen) return
@@ -255,7 +277,6 @@ export function LessonGigachatDrawer({
 
     setMessages(nextMessages)
     setPrompt('')
-    setError('')
     setIsSending(true)
 
     try {
@@ -281,7 +302,7 @@ export function LessonGigachatDrawer({
         },
       ])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось получить ответ от GigaChat.')
+      showErrorToast(err instanceof Error ? err.message : 'Не удалось получить ответ от GigaChat.')
     } finally {
       setIsSending(false)
     }
@@ -433,12 +454,6 @@ export function LessonGigachatDrawer({
           </div>
 
           <div className="lesson-chat-composer mt-auto border-t border-slate-200/80 bg-white/92 px-4 pb-4 pt-3 md:px-5 md:pb-5">
-            {error && (
-              <div className="mb-3 rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {error}
-              </div>
-            )}
-
             <div className="lesson-chat-input-shell rounded-[26px] border border-slate-200 bg-slate-50 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
               <textarea
                 ref={inputRef}
@@ -479,15 +494,13 @@ export function LessonGigachatDrawer({
         ref={buttonRef}
         type="button"
         onClick={() => setIsOpen(true)}
-        className={`lesson-chat-trigger fixed bottom-4 right-4 z-30 inline-flex items-center gap-3 rounded-full border border-white/80 bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_45px_rgba(15,23,42,0.22)] transition md:bottom-6 md:right-6 md:px-5 ${
+        aria-label="Открыть GigaChat"
+        className={`lesson-chat-trigger fixed bottom-4 right-4 z-30 inline-flex size-14 items-center justify-center rounded-full border border-white/80 bg-slate-900 p-0 text-white shadow-[0_18px_45px_rgba(15,23,42,0.22)] transition md:bottom-6 md:right-6 md:size-16 ${
           isOpen ? 'pointer-events-none translate-x-6 opacity-0' : 'hover:-translate-y-0.5 opacity-100'
         }`}
       >
-        <span className="flex size-10 items-center justify-center rounded-full bg-white/14">
-          <Bot className="size-5" />
-        </span>
-        <span className="max-w-[150px] leading-5 text-left sm:max-w-none">
-          Спросить GigaChat
+        <span className="flex size-8 items-center justify-center rounded-full bg-white/14 md:size-10">
+          <Bot className="size-4 md:size-5" />
         </span>
       </button>
     </>

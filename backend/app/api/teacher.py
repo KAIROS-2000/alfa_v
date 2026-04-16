@@ -4,6 +4,7 @@ from flask import Blueprint, request
 from sqlalchemy import or_
 
 from ..core.db import db
+from .lesson_builder import build_lesson_quiz
 from ..core.security import auth_required
 from ..models.learning import (
     Assignment,
@@ -42,6 +43,16 @@ ASSIGNMENT_TYPE_DEFAULT_DESCRIPTIONS = {
     'mini_project': 'Создай мини-проект по теме и опиши, как он работает.',
     'quiz': 'Пройди короткий тест и обоснуй ответы на сложные вопросы.',
     'reflection': 'Коротко опиши, что получилось, что было сложно и что стоит улучшить.',
+}
+ASSIGNMENT_REQUIRED_FIELD_LABELS = {
+    'title': 'название задания',
+    'lesson_id': 'урок',
+    'due_date': 'дедлайн',
+    'learning_goal': 'цель обучения',
+    'resources': 'материалы',
+    'work_steps': 'шаги выполнения',
+    'success_criteria': 'критерии успеха',
+    'description': 'описание задания',
 }
 
 
@@ -120,6 +131,28 @@ def _compose_assignment_description(data: dict, assignment_type: str) -> str:
         sections.append('Материалы:\n' + '\n'.join(f'- {item}' for item in resources))
 
     return '\n\n'.join(sections).strip()
+
+
+def _missing_assignment_fields(data: dict) -> list[str]:
+    missing: list[str] = []
+
+    for field in (
+        'title',
+        'due_date',
+        'learning_goal',
+        'resources',
+        'work_steps',
+        'success_criteria',
+        'description',
+    ):
+        if not (data.get(field) or '').strip():
+            missing.append(field)
+
+    lesson_id = data.get('lesson_id')
+    if lesson_id is None or (isinstance(lesson_id, str) and not lesson_id.strip()):
+        missing.append('lesson_id')
+
+    return missing
 
 
 def _get_or_create_custom_module(classroom: Classroom, age_group: str) -> Module:
@@ -335,6 +368,14 @@ def create_class_lesson(current_user: User, classroom_id: int):
             )
         )
 
+    try:
+        quiz = build_lesson_quiz(lesson, data.get('quiz'), title, question_prefix='teacher-q')
+        if quiz is not None:
+            db.session.add(quiz)
+    except ValueError as exc:
+        db.session.rollback()
+        return {'message': str(exc)}, 400
+
     db.session.commit()
     return {'lesson': lesson.to_dict(include_private=True), 'catalog_item': _lesson_catalog_item(lesson)}, 201
 
@@ -344,23 +385,30 @@ def create_class_lesson(current_user: User, classroom_id: int):
 def create_assignment(current_user: User, classroom_id: int):
     classroom = Classroom.query.filter_by(id=classroom_id, teacher_id=current_user.id).first_or_404()
     data = request.get_json() or {}
+    missing_fields = _missing_assignment_fields(data)
+    if missing_fields:
+        labels = ', '.join(ASSIGNMENT_REQUIRED_FIELD_LABELS[field] for field in missing_fields)
+        return {
+            'message': f'Заполните обязательные поля: {labels}.',
+            'fields': missing_fields,
+        }, 400
+
     lesson_id = data.get('lesson_id')
     lesson = None
     assignment_type = normalize_assignment_type(data.get('assignment_type'))
     submission_format = normalize_submission_format(data.get('submission_format'))
-    if lesson_id:
-        parsed_lesson_id = _parse_positive_int(lesson_id)
-        if parsed_lesson_id is None:
-            return {'message': 'Некорректный идентификатор урока.'}, 400
-        lesson = Lesson.query.get_or_404(parsed_lesson_id)
-        if not _teacher_can_use_lesson(classroom, lesson):
-            return {'message': 'Этот урок нельзя назначить выбранному классу.'}, 403
-    title = (data.get('title') or '').strip() or ASSIGNMENT_TYPE_DEFAULT_TITLES[assignment_type]
+    parsed_lesson_id = _parse_positive_int(lesson_id)
+    if parsed_lesson_id is None:
+        return {'message': 'Некорректный идентификатор урока.'}, 400
+    lesson = Lesson.query.get_or_404(parsed_lesson_id)
+    if not _teacher_can_use_lesson(classroom, lesson):
+        return {'message': 'Этот урок нельзя назначить выбранному классу.'}, 403
+    title = (data.get('title') or '').strip()
     description = _compose_assignment_description(data, assignment_type)
 
     assignment = Assignment(
         classroom_id=classroom.id,
-        lesson_id=lesson.id if lesson else None,
+        lesson_id=lesson.id,
         title=title,
         description=encode_assignment_description(description, assignment_type, submission_format),
         difficulty=_normalize_difficulty(data.get('difficulty')),

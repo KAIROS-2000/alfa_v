@@ -109,6 +109,64 @@ class TeacherReadPathTests(unittest.TestCase):
             db.session.commit()
             return teacher.id, classroom.id, assignment.id
 
+    def create_teacher_assignment_fixture(self, app):
+        from app.core.db import db
+        from app.core.security import hash_password
+        from app.models.learning import Classroom, Lesson, Module
+        from app.models.user import User, UserRole
+
+        with app.app_context():
+            teacher = User(
+                full_name='Teacher Example',
+                username='teacher',
+                email='teacher@example.com',
+                password_hash=hash_password('TeacherPass123!'),
+                role=UserRole.TEACHER,
+                age_group=None,
+            )
+            db.session.add(teacher)
+            db.session.flush()
+
+            classroom = Classroom(
+                name='Math',
+                description='Test class',
+                code='CLASS1',
+                teacher_id=teacher.id,
+            )
+            db.session.add(classroom)
+            db.session.flush()
+
+            module = Module(
+                slug='published-module',
+                title='Published module',
+                description='Module for assignment tests',
+                age_group='middle',
+                icon='sparkles',
+                color='#4A90D9',
+                order_index=1,
+                is_published=True,
+            )
+            db.session.add(module)
+            db.session.flush()
+
+            lesson = Lesson(
+                module_id=module.id,
+                slug='published-lesson',
+                title='Published lesson',
+                summary='Lesson summary',
+                content_format='mixed',
+                theory_blocks=[],
+                interactive_steps=[],
+                order_index=1,
+                duration_minutes=30,
+                passing_score=70,
+                is_published=True,
+            )
+            db.session.add(lesson)
+            db.session.commit()
+
+            return classroom.id, lesson.id
+
     def login_teacher(self, client):
         return client.post('/api/auth/login', json={'login': 'teacher@example.com', 'password': 'TeacherPass123!'})
 
@@ -134,6 +192,227 @@ class TeacherReadPathTests(unittest.TestCase):
 
         with app.app_context():
             self.assertEqual(AssignmentSubmission.query.count(), 0)
+
+    def test_teacher_cannot_create_assignment_without_lesson(self):
+        app = self.create_app()
+        classroom_id, lesson_id = self.create_teacher_assignment_fixture(app)
+
+        from app.models.learning import Assignment
+
+        with app.test_client() as client:
+            login_response = self.login_teacher(client)
+            self.assertEqual(login_response.status_code, 200)
+
+            response = client.post(
+                f'/api/teacher/classes/{classroom_id}/assignments',
+                json={
+                    'title': 'Практика по теме',
+                    'description': 'Закрепите материал урока.',
+                    'due_date': '2026-04-20',
+                    'difficulty': 'medium',
+                    'assignment_type': 'lesson_practice',
+                    'submission_format': 'mixed',
+                    'learning_goal': 'Повторить ключевую тему.',
+                    'work_steps': 'Открой урок\nВыполни задание',
+                    'success_criteria': 'Есть готовое решение',
+                    'resources': 'Конспект урока',
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            payload = response.get_json()
+            self.assertIn('lesson_id', payload['fields'])
+            self.assertIn('урок', payload['message'])
+
+        with app.app_context():
+            self.assertEqual(Assignment.query.count(), 0)
+
+    def test_teacher_cannot_create_assignment_with_empty_required_fields(self):
+        app = self.create_app()
+        classroom_id, lesson_id = self.create_teacher_assignment_fixture(app)
+
+        from app.models.learning import Assignment
+
+        with app.test_client() as client:
+            login_response = self.login_teacher(client)
+            self.assertEqual(login_response.status_code, 200)
+
+            response = client.post(
+                f'/api/teacher/classes/{classroom_id}/assignments',
+                json={
+                    'title': '   ',
+                    'lesson_id': lesson_id,
+                    'description': '   ',
+                    'due_date': '',
+                    'difficulty': 'medium',
+                    'assignment_type': 'lesson_practice',
+                    'submission_format': 'mixed',
+                    'learning_goal': '   ',
+                    'work_steps': '',
+                    'success_criteria': ' ',
+                    'resources': '',
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            payload = response.get_json()
+            self.assertCountEqual(
+                payload['fields'],
+                [
+                    'title',
+                    'due_date',
+                    'learning_goal',
+                    'resources',
+                    'work_steps',
+                    'success_criteria',
+                    'description',
+                ],
+            )
+
+        with app.app_context():
+            self.assertEqual(Assignment.query.count(), 0)
+
+    def test_teacher_can_create_lesson_with_quiz_and_read_player_payload(self):
+        app = self.create_app()
+        _, classroom_id, _ = self.create_teacher_fixture(app)
+
+        with app.test_client() as client:
+            login_response = self.login_teacher(client)
+            self.assertEqual(login_response.status_code, 200)
+
+            response = client.post(
+                f'/api/teacher/classes/{classroom_id}/lessons',
+                json={
+                    'title': 'Авторский урок по алгоритмам',
+                    'summary': 'Разбираем последовательность действий и проверяем понимание.',
+                    'age_group': 'middle',
+                    'duration_minutes': 50,
+                    'passing_score': 80,
+                    'theory_text': 'Алгоритм помогает выполнять задачу шаг за шагом.',
+                    'key_points': 'Алгоритм\nПоследовательность действий',
+                    'interactive_steps': 'Прочитать задачу\nРазбить решение на шаги',
+                    'quiz': {
+                        'enabled': True,
+                        'title': 'Финальный квиз',
+                        'passing_score': 75,
+                        'questions': [
+                            {
+                                'type': 'single',
+                                'prompt': 'Что описывает алгоритм?',
+                                'options': ['Последовательность действий', 'Цвет интерфейса'],
+                                'correct': [0],
+                            },
+                            {
+                                'type': 'text',
+                                'prompt': 'Как называется понятный порядок шагов?',
+                                'correct': ['алгоритм'],
+                            },
+                        ],
+                    },
+                },
+            )
+            self.assertEqual(response.status_code, 201)
+            payload = response.get_json()
+            lesson_id = payload['lesson']['id']
+            self.assertEqual(payload['catalog_item']['id'], lesson_id)
+            self.assertEqual(payload['catalog_item']['source'], 'teacher')
+            self.assertEqual(len(payload['lesson']['quizzes']), 1)
+            self.assertEqual(payload['lesson']['quizzes'][0]['title'], 'Финальный квиз')
+            self.assertEqual(len(payload['lesson']['quizzes'][0]['questions']), 2)
+
+            catalog_response = client.get(f'/api/teacher/lesson-catalog?classroom_id={classroom_id}')
+            self.assertEqual(catalog_response.status_code, 200)
+            catalog_payload = catalog_response.get_json()
+            self.assertTrue(any(item['id'] == lesson_id for item in catalog_payload['lessons']))
+
+            lesson_response = client.get(f'/api/lessons/{lesson_id}')
+            self.assertEqual(lesson_response.status_code, 200)
+            lesson_payload = lesson_response.get_json()
+            self.assertEqual(len(lesson_payload['lesson']['quizzes']), 1)
+            for question in lesson_payload['lesson']['quizzes'][0]['questions']:
+                self.assertNotIn('correct', question)
+
+        with app.app_context():
+            from app.models.learning import Lesson, Quiz
+
+            lesson = Lesson.query.get(lesson_id)
+            self.assertIsNotNone(lesson)
+            self.assertEqual(lesson.module.custom_classroom_id, classroom_id)
+            self.assertEqual(Quiz.query.count(), 1)
+
+    def test_teacher_rejects_junior_code_practice(self):
+        app = self.create_app()
+        _, classroom_id, _ = self.create_teacher_fixture(app)
+
+        with app.test_client() as client:
+            login_response = self.login_teacher(client)
+            self.assertEqual(login_response.status_code, 200)
+
+            response = client.post(
+                f'/api/teacher/classes/{classroom_id}/lessons',
+                json={
+                    'title': 'Junior код',
+                    'summary': 'Проверяем ограничение для junior.',
+                    'age_group': 'junior',
+                    'duration_minutes': 40,
+                    'passing_score': 70,
+                    'theory_text': 'Короткая теория.',
+                    'key_points': 'Условие\nРезультат',
+                    'interactive_steps': 'Прочитать\nОтветить',
+                    'task_type': 'code',
+                    'task_title': 'Напиши решение',
+                    'task_prompt': 'Считай число и выведи его.',
+                    'starter_code': 'print(input())',
+                    'evaluation_mode': 'stdin_stdout',
+                    'programming_language': 'python',
+                    'judge_tests': [
+                        {'label': 'Тест 1', 'input': '7', 'expected': '7'},
+                    ],
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('Junior-уроков кодовая практика недоступна', response.get_json()['message'])
+
+    def test_teacher_rejects_invalid_quiz_payload(self):
+        app = self.create_app()
+        _, classroom_id, _ = self.create_teacher_fixture(app)
+
+        with app.test_client() as client:
+            login_response = self.login_teacher(client)
+            self.assertEqual(login_response.status_code, 200)
+
+            response = client.post(
+                f'/api/teacher/classes/{classroom_id}/lessons',
+                json={
+                    'title': 'Урок с ошибочным квизом',
+                    'summary': 'Проверяем server-side валидацию квиза.',
+                    'age_group': 'middle',
+                    'duration_minutes': 45,
+                    'passing_score': 70,
+                    'theory_text': 'Немного теории.',
+                    'key_points': 'Факт 1\nФакт 2',
+                    'interactive_steps': 'Шаг 1\nШаг 2',
+                    'quiz': {
+                        'enabled': True,
+                        'title': 'Пустой квиз',
+                        'passing_score': 60,
+                        'questions': [
+                            {
+                                'type': 'single',
+                                'prompt': 'Выберите правильный ответ',
+                                'options': ['Только один вариант'],
+                                'correct': [0],
+                            }
+                        ],
+                    },
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('корректный вопрос', response.get_json()['message'])
+
+        with app.app_context():
+            from app.models.learning import Lesson, Quiz
+
+            self.assertEqual(Lesson.query.count(), 0)
+            self.assertEqual(Quiz.query.count(), 0)
 
 
 if __name__ == '__main__':

@@ -3,7 +3,10 @@
 import Editor, { loader } from '@monaco-editor/react'
 import { useEffect, useState } from 'react'
 
+import { useAppTheme } from '@/hooks/use-app-theme'
+
 let monacoLoaderPromise: Promise<void> | null = null
+const EDITOR_HEIGHT = 'min(360px, 48vh)'
 
 function initializeMonacoLoader() {
   if (!monacoLoaderPromise) {
@@ -31,6 +34,7 @@ export function LessonCodeEditor({
 }) {
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState('')
+  const theme = useAppTheme()
 
   useEffect(() => {
     let isActive = true
@@ -54,7 +58,7 @@ export function LessonCodeEditor({
 
   if (error) {
     return (
-      <div className="flex h-[360px] items-center justify-center bg-slate-50 px-4 text-center text-sm font-medium text-rose-600">
+      <div className="flex items-center justify-center bg-slate-50 px-4 text-center text-sm font-medium text-rose-600" style={{ height: EDITOR_HEIGHT }}>
         {error}
       </div>
     )
@@ -62,7 +66,7 @@ export function LessonCodeEditor({
 
   if (!isReady) {
     return (
-      <div className="flex h-[360px] items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+      <div className="flex items-center justify-center bg-slate-50 text-sm font-medium text-slate-500" style={{ height: EDITOR_HEIGHT }}>
         Загружаем редактор…
       </div>
     )
@@ -70,16 +74,16 @@ export function LessonCodeEditor({
 
   return (
     <Editor
-      height="360px"
+      height={EDITOR_HEIGHT}
       language={language}
       value={value}
       onChange={(nextValue) => onChange(nextValue || '')}
       loading={
-        <div className="flex h-[360px] items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+        <div className="flex items-center justify-center bg-slate-50 text-sm font-medium text-slate-500" style={{ height: EDITOR_HEIGHT }}>
           Загружаем редактор…
         </div>
       }
-      theme="vs-light"
+      theme={theme === 'dark' ? 'vs-dark' : 'vs-light'}
     />
   )
 }

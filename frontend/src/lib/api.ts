@@ -1,4 +1,5 @@
 import { PUBLIC_API_URL } from './public-env'
+import { setAnonymousSession } from './session-store'
 
 const API_URL = PUBLIC_API_URL
 let refreshRequest: Promise<boolean> | null = null
@@ -73,6 +74,8 @@ async function refreshSession() {
 }
 
 async function clearSessionSilently() {
+  setAnonymousSession()
+
   try {
     await fetch(`${API_URL}/auth/logout`, {
       method: 'POST',
@@ -107,10 +110,14 @@ export async function api<T>(path: string, init: RequestInit = {}, auth: ApiAuth
   }
 
   if (!response.ok) {
-    if (authMode === 'required' && response.status === 401) {
+    if (authMode !== 'none' && response.status === 401) {
       await clearSessionSilently()
     }
     throw new ApiError(extractErrorMessage(payload) || 'Ошибка запроса', response.status, payload)
+  }
+
+  if (path === '/auth/logout') {
+    setAnonymousSession()
   }
 
   return payload as T

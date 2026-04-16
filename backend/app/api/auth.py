@@ -18,11 +18,12 @@ from ..core.security import (
     refresh_token_from_request,
     register_login_failure,
     set_auth_cookies,
-    validate_password,
     revoke_refresh_token,
+    token_matches_user_session,
+    validate_password,
     verify_password,
 )
-from ..models.user import RefreshToken, User, UserRole
+from ..models.user import RefreshToken, User, UserRole, USERNAME_MAX_LENGTH
 
 
 auth_bp = Blueprint('auth', __name__)
@@ -61,6 +62,8 @@ def register():
         return {'message': 'Самостоятельная регистрация доступна только ученикам и учителям.'}, 400
     if not email or not username or not password:
         return {'message': 'Заполните email, username и пароль.'}, 400
+    if len(username) > USERNAME_MAX_LENGTH:
+        return {'message': f'Логин должен содержать не более {USERNAME_MAX_LENGTH} символов.'}, 400
     if password_error:
         return {'message': password_error}, 400
     if not is_valid_email(email):
@@ -134,8 +137,16 @@ def refresh():
 
     refresh_row = RefreshToken.query.filter_by(token_id=payload.get('jti')).first()
     user = db.session.get(User, int(payload['sub'])) if payload.get('sub') else None
-    if not refresh_row or not user or not user.is_active:
-        return {'message': 'Refresh token отозван или пользователь недоступен'}, 401
+    if not refresh_row or not user:
+        return {'message': 'Refresh token отозван или пользователь недоступен', 'code': 'session_revoked'}, 401
+    if not user.is_active:
+        db.session.delete(refresh_row)
+        db.session.commit()
+        return {'message': 'Пользователь заблокирован.', 'code': 'user_blocked'}, 401
+    if not token_matches_user_session(payload, user):
+        db.session.delete(refresh_row)
+        db.session.commit()
+        return {'message': 'Refresh token отозван или пользователь недоступен', 'code': 'session_revoked'}, 401
 
     db.session.delete(refresh_row)
     tokens = create_token_pair(user)
